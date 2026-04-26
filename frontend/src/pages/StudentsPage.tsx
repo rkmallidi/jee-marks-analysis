@@ -8,6 +8,7 @@ import { studentsApi, StudentOut } from "@/lib/api";
 import { PageLoader } from "@/components/ui/LoadingSpinner";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import EmptyState from "@/components/ui/EmptyState";
+import { EditStudentModal } from "@/components/ui/EditStudentModal";
 
 const PAGE_SIZE = 20;
 
@@ -20,6 +21,7 @@ export default function StudentsPage() {
   const [section, setSection]         = useState("");
   const [page, setPage]               = useState(1);
   const [downloadFormat, setDownloadFormat] = useState<"csv" | "xlsx">("csv");
+  const [editingStudent, setEditingStudent] = useState<StudentOut | null>(null);
 
   const searchTimer = useRef<ReturnType<typeof setTimeout>>();
   const handleSearch = (v: string) => {
@@ -111,6 +113,11 @@ export default function StudentsPage() {
 
   return (
     <div className="space-y-6">
+      <EditStudentModal
+        student={editingStudent!}
+        isOpen={!!editingStudent}
+        onClose={() => setEditingStudent(null)}
+      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -234,7 +241,7 @@ export default function StudentsPage() {
                 </thead>
                 <tbody>
                   {data.items.map((s) => (
-                    <StudentRow key={s.admission_no} student={s} />
+                    <StudentRow key={s.admission_no} student={s} onEdit={setEditingStudent} />
                   ))}
                 </tbody>
               </table>
@@ -272,7 +279,7 @@ export default function StudentsPage() {
   );
 }
 
-function StudentRow({ student: s }: { student: StudentOut }) {
+function StudentRow({ student: s, onEdit }: { student: StudentOut; onEdit: (s: StudentOut) => void }) {
   return (
     <tr>
       <td className="font-mono text-xs text-surface-500">{s.admission_no}</td>
@@ -286,7 +293,13 @@ function StudentRow({ student: s }: { student: StudentOut }) {
       <td className="text-sm">{s.student_class}</td>
       <td className="text-sm">{s.section}</td>
       <td className="text-sm">{s.dean}</td>
-      <td>
+      <td className="flex gap-2">
+        <button
+          onClick={() => onEdit(s)}
+          className="btn-ghost btn-sm text-amber-600 hover:bg-amber-50"
+        >
+          Edit
+        </button>
         <Link to={`/students/${s.admission_no}`} className="btn-ghost btn-sm text-primary-600">
           View →
         </Link>
