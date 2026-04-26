@@ -83,6 +83,9 @@ class StudentCreate(BaseModel):
 
 class StudentUpdate(BaseModel):
     name:          Optional[str] = Field(default=None, min_length=2, max_length=150)
+    branch_name:   Optional[str] = None
+    program_name:  Optional[str] = None
+    student_class: Optional[str] = None
     section:       Optional[str] = Field(default=None, min_length=1, max_length=10)
     dean:          Optional[str] = None
     status:        Optional[str] = None
