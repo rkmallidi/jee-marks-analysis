@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { dashboardApi, QuestionResponse } from "@/lib/api";
+import { dashboardApi } from "@/lib/api";
 import { fmtNum } from "@/lib/utils";
 import { PageLoader } from "@/components/ui/LoadingSpinner";
 

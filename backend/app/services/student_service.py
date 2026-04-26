@@ -25,10 +25,13 @@ class StudentService:
         search:           str | None = None,
         page:             int = 1,
         page_size:        int = 50,
+        student_class:    str | None = None,
+        dean:             str | None = None,
     ) -> tuple[list[Student], int]:
         return await self._repo.list_students(
             branch_name, program_name, section, status,
             allowed_sections, search, page, page_size,
+            student_class=student_class, dean=dean,
         )
 
     async def export_students(
@@ -104,3 +107,13 @@ class StudentService:
     async def get_allowed_sections_for_faculty(self, user_id: int) -> list[str]:
         fs_list = await self._repo.get_faculty_sections(user_id)
         return [fs.section for fs in fs_list]
+
+    async def get_filter_options(self) -> dict:
+        """Get distinct values for filter dropdowns"""
+        return {
+            "branches": await self._repo.get_distinct_branches(),
+            "programs": await self._repo.get_distinct_programs(),
+            "classes": await self._repo.get_distinct_classes(),
+            "sections": await self._repo.get_distinct_sections(),
+            "deans": await self._repo.get_distinct_deans(),
+        }

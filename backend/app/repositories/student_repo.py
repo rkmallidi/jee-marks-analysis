@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.orm import FacultySection, Student
@@ -26,6 +26,8 @@ class StudentRepository:
         search:           str | None = None,
         page:             int | None = 1,
         page_size:        int | None = 50,
+        student_class:    str | None = None,
+        dean:             str | None = None,
     ) -> tuple[list[Student], int]:
         q = select(Student)
         if branch_name:
@@ -34,15 +36,20 @@ class StudentRepository:
             q = q.where(Student.program_name == program_name)
         if section:
             q = q.where(Student.section == section)
+        if student_class:
+            q = q.where(Student.student_class == student_class)
+        if dean:
+            q = q.where(Student.dean == dean)
         if status:
             q = q.where(Student.status == status)
         if allowed_sections is not None:
             q = q.where(Student.section.in_(allowed_sections))
         if search:
+            # Use LIKE/ILIKE for basic text search instead of full-text search to avoid DB-specific issues
+            search_pattern = f"%{search}%"
             q = q.where(
-                Student.search_vector.op("@@")(
-                    text("plainto_tsquery('english', :q)")
-                ).bindparams(q=search)
+                (Student.name.ilike(search_pattern)) |
+                (Student.admission_no.ilike(search_pattern))
             )
 
         count_q = select(func.count()).select_from(q.subquery())
@@ -77,3 +84,33 @@ class StudentRepository:
             select(FacultySection).where(FacultySection.user_id == user_id)
         )
         return list(r.scalars().all())
+
+    async def get_distinct_branches(self) -> list[str]:
+        r = await self._s.execute(
+            select(distinct(Student.branch_name)).where(Student.branch_name.isnot(None)).order_by(Student.branch_name)
+        )
+        return [v for v in r.scalars().all() if v]
+
+    async def get_distinct_programs(self) -> list[str]:
+        r = await self._s.execute(
+            select(distinct(Student.program_name)).where(Student.program_name.isnot(None)).order_by(Student.program_name)
+        )
+        return [v for v in r.scalars().all() if v]
+
+    async def get_distinct_classes(self) -> list[str]:
+        r = await self._s.execute(
+            select(distinct(Student.student_class)).where(Student.student_class.isnot(None)).order_by(Student.student_class)
+        )
+        return [v for v in r.scalars().all() if v]
+
+    async def get_distinct_sections(self) -> list[str]:
+        r = await self._s.execute(
+            select(distinct(Student.section)).where(Student.section.isnot(None)).order_by(Student.section)
+        )
+        return [v for v in r.scalars().all() if v]
+
+    async def get_distinct_deans(self) -> list[str]:
+        r = await self._s.execute(
+            select(distinct(Student.dean)).where(Student.dean.isnot(None)).order_by(Student.dean)
+        )
+        return [v for v in r.scalars().all() if v]

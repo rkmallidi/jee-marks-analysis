@@ -8,6 +8,190 @@ import { PageLoader } from "@/components/ui/LoadingSpinner";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import EmptyState from "@/components/ui/EmptyState";
 
+// ── Question type reference data ───────────────────────────────────────────────
+
+const Q_TYPE_REFERENCE = [
+  {
+    value:   "SCQ",
+    label:   "Single Correct (SCQ)",
+    color:   "bg-indigo-100 text-indigo-700",
+    answer:  "One letter: A, B, C or D",
+    grading: "+marks if correct · −marks if wrong · 0 if blank",
+    note:    "",
+  },
+  {
+    value:   "MCQ",
+    label:   "Multi-Correct (MCQ)",
+    color:   "bg-purple-100 text-purple-700",
+    answer:  "All correct letters together, e.g. ABD",
+    grading: "All correct + no wrong → full marks · Subset correct + no wrong → +1 per chosen (capped at pos−1) · Any wrong → −marks · Blank → 0",
+    note:    "JEE Advanced style. MCQ_MULTI is a legacy alias for the same rule.",
+  },
+  {
+    value:   "PARTIAL_MCQ",
+    label:   "Partial MCQ (flat credit)",
+    color:   "bg-violet-100 text-violet-700",
+    answer:  "Selected option letters, e.g. ABD",
+    grading: "All correct + no wrong → full marks · Subset correct + no wrong → flat partial_marks · Any wrong → −marks · Blank → 0",
+    note:    "Partial credit is a fixed value, not per-option like MCQ.",
+  },
+  {
+    value:   "NUMERICAL_INT",
+    label:   "Numerical Integer",
+    color:   "bg-teal-100 text-teal-700",
+    answer:  "Integer: 42   or range: 3:7",
+    grading: "Exact (or within integer range) → full marks · Wrong → 0 · Blank → 0 · No negative marking",
+    note:    "",
+  },
+  {
+    value:   "NUMERICAL_DECIMAL",
+    label:   "Numerical Decimal",
+    color:   "bg-cyan-100 text-cyan-700",
+    answer:  "Decimal: 3.14   or range: 9.95:10.05",
+    grading: "Answer rounded to 2 dp. Exact (or within range) → full marks · Wrong → 0 · Blank → 0 · No negative",
+    note:    "",
+  },
+  {
+    value:   "NUMERICAL_RANGE",
+    label:   "Numerical Range",
+    color:   "bg-sky-100 text-sky-700",
+    answer:  "Range only: min:max, e.g. 8.5:9.5",
+    grading: "Student decimal must fall within [min, max] → full marks · Otherwise 0 · No negative",
+    note:    "Correct option must always be in lo:hi format.",
+  },
+  {
+    value:   "DELETED",
+    label:   "Deleted / Bonus",
+    color:   "bg-red-100 text-red-600",
+    answer:  "N/A — question dropped",
+    grading: "Every student receives full positive_marks as bonus regardless of response",
+    note:    "Set via is_deleted_bkc or is_deleted_akc flag. Excluded from accuracy metrics.",
+  },
+  {
+    value:   "NO_NEGATIVE",
+    label:   "No-Negative SCQ",
+    color:   "bg-indigo-50 text-indigo-500",
+    answer:  "One letter: A, B, C or D",
+    grading: "+marks if correct · 0 if wrong (no penalty) · 0 if blank",
+    note:    "Equivalent to SCQ with negative_marks = 0.",
+  },
+] as const;
+
+function QuestionTypeHelpModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div
+        className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b border-surface-100 sticky top-0 bg-white rounded-t-2xl">
+          <div>
+            <h2 className="text-base font-bold text-surface-900">Question Types Reference</h2>
+            <p className="text-xs text-surface-400 mt-0.5">How each type is graded by the evaluation engine</p>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-100 text-surface-500 text-xl leading-none">×</button>
+        </div>
+
+        <div className="px-6 py-4 space-y-3">
+          {Q_TYPE_REFERENCE.map((t) => (
+            <div key={t.value} className="rounded-xl border border-surface-100 p-4 space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full font-mono ${t.color}`}>{t.value}</span>
+                <span className="text-sm font-semibold text-surface-800">{t.label}</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1 text-xs">
+                <div>
+                  <span className="text-surface-400 font-semibold uppercase tracking-wide text-[10px]">Answer format</span>
+                  <p className="font-mono text-surface-700 mt-0.5">{t.answer}</p>
+                </div>
+                <div>
+                  <span className="text-surface-400 font-semibold uppercase tracking-wide text-[10px]">Grading</span>
+                  <p className="text-surface-700 mt-0.5 leading-relaxed">{t.grading}</p>
+                </div>
+              </div>
+              {t.note && (
+                <p className="text-[11px] text-surface-400 italic border-t border-surface-50 pt-2">{t.note}</p>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DifficultyHelpModal({ onClose }: { onClose: () => void }) {
+  const levels = [
+    { d: "Easy",      weight: 1, range: "avg < 1.5",        badge: "bg-emerald-100 text-emerald-700", bar: "bg-emerald-400", desc: "Straightforward recall or direct application of a single concept." },
+    { d: "Medium",    weight: 2, range: "1.5 ≤ avg < 2.5",  badge: "bg-sky-100 text-sky-700",         bar: "bg-sky-400",     desc: "Requires combining two or more steps or moderate conceptual reasoning." },
+    { d: "Hard",      weight: 3, range: "2.5 ≤ avg < 3.5",  badge: "bg-orange-100 text-orange-700",   bar: "bg-orange-500",  desc: "Multi-step problem with non-obvious approach or tricky conditions." },
+    { d: "Very Hard", weight: 4, range: "avg ≥ 3.5",         badge: "bg-rose-100 text-rose-700",       bar: "bg-rose-600",    desc: "Involves deep insight, lengthy calculation, or highly abstract reasoning." },
+  ] as const;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div
+        className="bg-white rounded-2xl shadow-xl w-full max-w-xl max-h-[85vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b border-surface-100 sticky top-0 bg-white rounded-t-2xl">
+          <div>
+            <h2 className="text-base font-bold text-surface-900">Difficulty Reference</h2>
+            <p className="text-xs text-surface-400 mt-0.5">Levels, weights, and how the rating is computed</p>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-100 text-surface-500 text-xl leading-none">×</button>
+        </div>
+
+        <div className="px-6 py-4 space-y-4">
+          {/* Level cards */}
+          <div className="space-y-2">
+            {levels.map(({ d, weight, badge, bar, desc }) => (
+              <div key={d} className="flex items-start gap-3 rounded-xl border border-surface-100 p-3">
+                <div className={`w-2.5 h-2.5 rounded-full mt-1 shrink-0 ${bar}`} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${badge}`}>{d}</span>
+                    <span className="text-[11px] text-surface-400 font-mono">weight = {weight}</span>
+                  </div>
+                  <p className="text-xs text-surface-600 mt-1 leading-relaxed">{desc}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Calculation section */}
+          <div className="rounded-xl bg-surface-50 border border-surface-100 p-4 space-y-3">
+            <p className="text-xs font-bold uppercase tracking-wide text-surface-500">How the rating is calculated</p>
+
+            <div className="space-y-1.5 text-xs text-surface-700">
+              <p><span className="font-semibold">1. Assign weights</span> — Easy=1, Medium=2, Hard=3, Very Hard=4</p>
+              <p><span className="font-semibold">2. Weighted average</span> over all <em>tagged</em> (non-deleted) questions:</p>
+              <div className="bg-white border border-surface-200 rounded-lg px-3 py-2 font-mono text-[11px] text-surface-800">
+                avg = Σ(count<sub>level</sub> × weight<sub>level</sub>) ÷ total_tagged
+              </div>
+              <p><span className="font-semibold">3. Map avg to label:</span></p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 pl-2">
+                {levels.map(({ d, range, badge }) => (
+                  <div key={d} className="flex items-center gap-1.5">
+                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${badge}`}>{d}</span>
+                    <span className="text-surface-500 text-[11px] font-mono">{range}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="border-t border-surface-100 pt-3 text-xs text-surface-500 space-y-1">
+              <p>• <span className="font-semibold">Untagged questions are excluded</span> from all difficulty calculations.</p>
+              <p>• <span className="font-semibold">Subject-wise rating</span> uses the same formula but restricted to questions of that subject only.</p>
+              <p>• The stacked bar shows the proportion of each level among tagged questions for a visual distribution.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── constants ──────────────────────────────────────────────────────────────────
 
 const SUBJECTS = ["Physics", "Chemistry", "Mathematics"];
@@ -769,11 +953,13 @@ export default function QuestionPaperPage() {
   const [filterDiff, setFilterDiff] = useState("all");
   const [search,     setSearch]     = useState("");
 
-  const [editingQ,    setEditingQ]    = useState<QuestionOut | null>(null);
-  const [addingOpen,  setAddingOpen]  = useState(false);
-  const [addError,    setAddError]    = useState("");
-  const [cleanOpen,   setCleanOpen]   = useState(false);
-  const [cleanError,  setCleanError]  = useState("");
+  const [editingQ,      setEditingQ]      = useState<QuestionOut | null>(null);
+  const [addingOpen,    setAddingOpen]    = useState(false);
+  const [addError,      setAddError]      = useState("");
+  const [cleanOpen,     setCleanOpen]     = useState(false);
+  const [cleanError,    setCleanError]    = useState("");
+  const [showTypeHelp,  setShowTypeHelp]  = useState(false);
+  const [showDiffHelp,  setShowDiffHelp]  = useState(false);
 
   // ── Exams list ────────────────────────────────────────────────────────────
   const { data: exams, isLoading: examsLoading } = useQuery<ExamOut[]>({
@@ -1060,6 +1246,13 @@ export default function QuestionPaperPage() {
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <span className="text-[11px] font-semibold uppercase tracking-wide text-surface-400">Overall Difficulty</span>
+                          <button
+                            onClick={() => setShowDiffHelp(true)}
+                            className="w-3.5 h-3.5 rounded-full bg-surface-200 hover:bg-primary-100 text-surface-500 hover:text-primary-600 text-[9px] font-bold flex items-center justify-center transition-colors leading-none shrink-0"
+                            title="How difficulty is calculated"
+                          >
+                            ?
+                          </button>
                           {(() => {
                             const rating = difficultyRating(stats.diffByLevel);
                             return rating
@@ -1193,8 +1386,30 @@ export default function QuestionPaperPage() {
                       <th>Subject</th>
                       <th>Topic</th>
                       <th>Sub-topic</th>
-                      <th>Difficulty</th>
-                      <th>Type</th>
+                      <th>
+                        <div className="flex items-center gap-1">
+                          Difficulty
+                          <button
+                            onClick={() => setShowDiffHelp(true)}
+                            className="w-4 h-4 rounded-full bg-surface-200 hover:bg-primary-100 text-surface-500 hover:text-primary-600 text-[10px] font-bold flex items-center justify-center transition-colors leading-none"
+                            title="Difficulty rating reference"
+                          >
+                            ?
+                          </button>
+                        </div>
+                      </th>
+                      <th>
+                        <div className="flex items-center gap-1">
+                          Type
+                          <button
+                            onClick={() => setShowTypeHelp(true)}
+                            className="w-4 h-4 rounded-full bg-surface-200 hover:bg-primary-100 text-surface-500 hover:text-primary-600 text-[10px] font-bold flex items-center justify-center transition-colors leading-none"
+                            title="Question type reference"
+                          >
+                            ?
+                          </button>
+                        </div>
+                      </th>
                       <th className="text-right">+Marks</th>
                       <th className="text-right">−Marks</th>
                       <th>BKC Answer</th>
@@ -1278,6 +1493,8 @@ export default function QuestionPaperPage() {
       )}
 
       {/* Modals */}
+      {showTypeHelp && <QuestionTypeHelpModal onClose={() => setShowTypeHelp(false)} />}
+      {showDiffHelp && <DifficultyHelpModal   onClose={() => setShowDiffHelp(false)} />}
       {addingOpen && (
         <AddModal
           examId={examId}

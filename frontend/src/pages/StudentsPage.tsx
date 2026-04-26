@@ -4,7 +4,7 @@
 import { useState, useRef } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { studentsApi, StudentOut } from "@/lib/api";
+import { studentsApi, StudentOut, FilterOptions } from "@/lib/api";
 import { PageLoader } from "@/components/ui/LoadingSpinner";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import EmptyState from "@/components/ui/EmptyState";
@@ -18,7 +18,10 @@ export default function StudentsPage() {
   const [search, setSearch]           = useState("");
   const [debouncedSearch, setDbSearch]= useState("");
   const [branchName, setBranchName]   = useState("");
+  const [programName, setProgramName] = useState("");
+  const [studentClass, setStudentClass] = useState("");
   const [section, setSection]         = useState("");
+  const [dean, setDean]               = useState("");
   const [page, setPage]               = useState(1);
   const [downloadFormat, setDownloadFormat] = useState<"csv" | "xlsx">("csv");
   const [editingStudent, setEditingStudent] = useState<StudentOut | null>(null);
@@ -34,14 +37,23 @@ export default function StudentsPage() {
   const [uploadErr, setUploadErr] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  const { data: filterOpts } = useQuery<FilterOptions>({
+    queryKey: ["student-filter-options"],
+    queryFn:  () => studentsApi.getFilterOptions().then((r) => r.data),
+    staleTime: 5 * 60 * 1000,
+  });
+
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["students", debouncedSearch, branchName, section, page],
+    queryKey: ["students", debouncedSearch, branchName, programName, studentClass, section, dean, page],
     queryFn: () =>
       studentsApi
         .list({
-          search:      debouncedSearch || undefined,
-          branch_name: branchName || undefined,
-          section:     section || undefined,
+          search:        debouncedSearch  || undefined,
+          branch_name:   branchName       || undefined,
+          program_name:  programName      || undefined,
+          student_class: studentClass     || undefined,
+          section:       section          || undefined,
+          dean:          dean             || undefined,
           page,
           page_size: PAGE_SIZE,
         })
@@ -109,7 +121,7 @@ export default function StudentsPage() {
   });
 
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 1;
-  const hasFilters = search || branchName || section;
+  const hasFilters = search || branchName || programName || studentClass || section || dean;
 
   return (
     <div className="space-y-6">
@@ -181,38 +193,46 @@ export default function StudentsPage() {
       )}
 
       {/* Filters */}
-      <div className="card py-3 flex flex-wrap gap-3 items-center">
+      <div className="card py-3 space-y-2">
         <input
           type="text"
           placeholder="Search name or admission no…"
           value={search}
           onChange={(e) => handleSearch(e.target.value)}
-          className="input flex-1 min-w-[200px] py-1.5"
+          className="input w-full py-1.5"
         />
-        <input
-          type="text"
-          placeholder="Branch…"
-          value={branchName}
-          onChange={(e) => { setBranchName(e.target.value); setPage(1); }}
-          className="input w-40 py-1.5"
-        />
-        <input
-          type="text"
-          placeholder="Section…"
-          value={section}
-          onChange={(e) => { setSection(e.target.value); setPage(1); }}
-          className="input w-32 py-1.5"
-        />
-        {hasFilters && (
-          <button
-            onClick={() => {
-              setSearch(""); setDbSearch(""); setBranchName(""); setSection(""); setPage(1);
-            }}
-            className="btn-ghost btn-sm text-surface-400"
-          >
-            Clear
-          </button>
-        )}
+        <div className="flex flex-wrap gap-2 items-center">
+          {(
+            [
+              { label: "Branch",  value: branchName,   setter: setBranchName,   opts: filterOpts?.branches  ?? [] },
+              { label: "Program", value: programName,  setter: setProgramName,  opts: filterOpts?.programs  ?? [] },
+              { label: "Class",   value: studentClass, setter: setStudentClass, opts: filterOpts?.classes   ?? [] },
+              { label: "Section", value: section,      setter: setSection,      opts: filterOpts?.sections  ?? [] },
+              { label: "Dean",    value: dean,         setter: setDean,         opts: filterOpts?.deans     ?? [] },
+            ] as { label: string; value: string; setter: (v: string) => void; opts: string[] }[]
+          ).map(({ label, value, setter, opts }) => (
+            <select
+              key={label}
+              value={value}
+              onChange={(e) => { setter(e.target.value); setPage(1); }}
+              className="input w-auto py-1.5 text-sm"
+            >
+              <option value="">All {label}s</option>
+              {opts.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          ))}
+          {hasFilters && (
+            <button
+              onClick={() => {
+                setSearch(""); setDbSearch(""); setBranchName(""); setProgramName("");
+                setStudentClass(""); setSection(""); setDean(""); setPage(1);
+              }}
+              className="btn-ghost btn-sm text-surface-400"
+            >
+              Clear
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Table */}

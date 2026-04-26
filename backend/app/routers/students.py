@@ -15,15 +15,26 @@ from app.services.student_service import StudentService
 router = APIRouter(prefix="/students", tags=["students"])
 
 
+@router.get("/filters/options")
+async def get_filter_options(
+    _: CurrentUser       = Depends(require_role(["admin", "dean", "faculty"])),
+    session: AsyncSession = Depends(get_session),
+):
+    """Get distinct values for filter dropdowns"""
+    return await StudentService(session).get_filter_options()
+
+
 @router.get("")
 async def list_students(
-    branch_name:  str | None = Query(None),
-    program_name: str | None = Query(None),
-    section:      str | None = Query(None),
-    status:       str | None = Query(None),
-    search:       str | None = Query(None),
-    page:         int        = Query(1, ge=1),
-    page_size:    int        = Query(50, ge=1, le=200),
+    branch_name:   str | None = Query(None),
+    program_name:  str | None = Query(None),
+    section:       str | None = Query(None),
+    student_class: str | None = Query(None),
+    dean:          str | None = Query(None),
+    status:        str | None = Query(None),
+    search:        str | None = Query(None),
+    page:          int        = Query(1, ge=1),
+    page_size:     int        = Query(50, ge=1, le=200),
     current_user: CurrentUser    = Depends(require_role(["admin", "dean", "faculty"])),
     session:      AsyncSession   = Depends(get_session),
 ):
@@ -32,7 +43,8 @@ async def list_students(
     if current_user.role == "faculty":
         allowed = await svc.get_allowed_sections_for_faculty(current_user.id)
     students, total = await svc.list_students(
-        branch_name, program_name, section, status, allowed, search, page, page_size
+        branch_name, program_name, section, status, allowed, search, page, page_size,
+        student_class=student_class, dean=dean,
     )
     return {"total": total, "page": page, "page_size": page_size,
             "items": [StudentOut.model_validate(s) for s in students]}

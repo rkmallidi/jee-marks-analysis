@@ -83,6 +83,7 @@ export const studentsApi = {
   create: (b: StudentCreate)     => api.post<StudentOut>("/students", b),
   update: (admissionNo: string, b: Partial<StudentCreate>) =>
     api.patch<StudentOut>(`/students/${admissionNo}`, b),
+  getFilterOptions: () => api.get<FilterOptions>("/students/filters/options"),
   bulkUpload: (file: File, onProgress?: (pct: number) => void) => {
     const fd = new FormData();
     fd.append("file", file);
@@ -251,13 +252,15 @@ export interface StudentCreate {
 }
 
 export interface StudentListParams {
-  search?:       string;
-  branch_name?:  string;
-  program_name?: string;
-  section?:      string;
-  status?:       string;
-  page?:         number;
-  page_size?:    number;
+  search?:        string;
+  branch_name?:   string;
+  program_name?:  string;
+  section?:       string;
+  student_class?: string;
+  dean?:          string;
+  status?:        string;
+  page?:          number;
+  page_size?:     number;
 }
 
 export interface StudentListResp {
@@ -265,6 +268,14 @@ export interface StudentListResp {
   total: number;
   page: number;
   page_size: number;
+}
+
+export interface FilterOptions {
+  branches: string[];
+  programs: string[];
+  classes: string[];
+  sections: string[];
+  deans: string[];
 }
 
 export interface UploadJobOut {
