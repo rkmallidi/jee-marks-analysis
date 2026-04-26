@@ -1,32 +1,43 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { studentsApi, StudentOut, StudentCreate } from "@/lib/api";
 
 interface EditStudentModalProps {
-  student: StudentOut;
+  student: StudentOut | null;
   isOpen: boolean;
   onClose: () => void;
 }
 
 export function EditStudentModal({ student, isOpen, onClose }: EditStudentModalProps) {
   const qc = useQueryClient();
-  const [formData, setFormData] = useState<Partial<StudentCreate>>({
-    name: student.name,
-    branch_name: student.branch_name,
-    program_name: student.program_name,
-    student_class: student.student_class,
-    section: student.section,
-    dean: student.dean,
-    status: student.status,
-  });
+  const [formData, setFormData] = useState<Partial<StudentCreate>>({});
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (student && isOpen) {
+      setFormData({
+        name: student.name,
+        branch_name: student.branch_name,
+        program_name: student.program_name,
+        student_class: student.student_class,
+        section: student.section,
+        dean: student.dean,
+        status: student.status,
+      });
+      setError(null);
+    }
+  }, [student, isOpen]);
+
   const updateMut = useMutation({
-    mutationFn: () =>
-      studentsApi.update(student.admission_no, formData),
+    mutationFn: () => {
+      if (!student) throw new Error("No student selected");
+      return studentsApi.update(student.admission_no, formData);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["students"] });
-      qc.invalidateQueries({ queryKey: ["student", student.admission_no] });
+      if (student) {
+        qc.invalidateQueries({ queryKey: ["student", student.admission_no] });
+      }
       setError(null);
       onClose();
     },

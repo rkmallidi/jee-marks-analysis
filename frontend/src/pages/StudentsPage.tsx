@@ -114,7 +114,7 @@ export default function StudentsPage() {
   return (
     <div className="space-y-6">
       <EditStudentModal
-        student={editingStudent!}
+        student={editingStudent}
         isOpen={!!editingStudent}
         onClose={() => setEditingStudent(null)}
       />
