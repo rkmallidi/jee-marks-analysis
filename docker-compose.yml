@@ -1,0 +1,60 @@
+version: "3.9"
+
+services:
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: jee_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       jeedb
+      POSTGRES_USER:     jee
+      POSTGRES_PASSWORD: jeepass
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jee -d jeedb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Backend API ───────────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: jee_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL:    postgresql+asyncpg://jee:jeepass@postgres:5432/jeedb
+      SECRET_KEY:      ${SECRET_KEY:-change-me-in-production-32chars}
+      ENVIRONMENT:     ${ENVIRONMENT:-production}
+      CORS_ORIGINS:    '["http://localhost:5173","http://localhost:80"]'
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Frontend ──────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: jee_frontend
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+
+volumes:
+  pgdata:
