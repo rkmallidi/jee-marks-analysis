@@ -64,15 +64,31 @@ export default function ExamResponseModal({ admissionNo, examId, examLabel, onCl
   }), [rows, paperFilter, subjectFilter, verdictFilter]);
 
   // Summary counts
-  const summary = useMemo(() => ({
-    correct: rows.filter((r) => r.verdict_bkc === "correct").length,
-    partial: rows.filter((r) => r.verdict_bkc === "partial").length,
-    wrong:   rows.filter((r) => r.verdict_bkc === "wrong").length,
-    blank:   rows.filter((r) => r.verdict_bkc === "blank").length,
-    totalBkc: rows.reduce((s, r) => s + (r.marks_bkc ?? 0), 0),
-    totalAkc: rows.reduce((s, r) => s + (r.marks_akc ?? 0), 0),
-    hasAkc:  rows.some((r) => r.verdict_akc !== null),
-  }), [rows]);
+  const summary = useMemo(() => {
+    const subjBkc: Record<string, number> = {};
+    const subjAkc: Record<string, number> = {};
+    for (const r of rows) {
+      subjBkc[r.subject] = (subjBkc[r.subject] ?? 0) + (r.marks_bkc ?? 0);
+      subjAkc[r.subject] = (subjAkc[r.subject] ?? 0) + (r.marks_akc ?? 0);
+    }
+    return {
+      correct:  rows.filter((r) => r.verdict_bkc === "correct").length,
+      partial:  rows.filter((r) => r.verdict_bkc === "partial").length,
+      wrong:    rows.filter((r) => r.verdict_bkc === "wrong").length,
+      blank:    rows.filter((r) => r.verdict_bkc === "blank").length,
+      totalBkc: rows.reduce((s, r) => s + (r.marks_bkc ?? 0), 0),
+      totalAkc: rows.reduce((s, r) => s + (r.marks_akc ?? 0), 0),
+      hasAkc:   rows.some((r) => r.verdict_akc !== null),
+      subjBkc,
+      subjAkc,
+    };
+  }, [rows]);
+
+  const SUBJ_ABBR: [string, string, string][] = [
+    ["Physics",     "P", "text-blue-600"],
+    ["Chemistry",   "C", "text-emerald-600"],
+    ["Mathematics", "M", "text-amber-600"],
+  ];
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-black/50 backdrop-blur-sm" onClick={onClose}>
@@ -104,9 +120,27 @@ export default function ExamResponseModal({ admissionNo, examId, examLabel, onCl
               <span className="text-red-600 font-semibold">✗ {summary.wrong} Wrong</span>
               <span className="text-surface-400">○ {summary.blank} Blank</span>
               <span className="text-surface-300">|</span>
-              <span className="font-semibold text-primary-700">BKC: {fmtNum(summary.totalBkc, 1)} marks</span>
+              <span className="font-semibold text-primary-700">
+                BKC: {fmtNum(summary.totalBkc, 1)} marks
+                <span className="ml-1.5 font-normal text-xs">
+                  ({SUBJ_ABBR.map(([subj, abbr, cls]) => (
+                    <span key={subj} className={cls}>
+                      {abbr}:{fmtNum(summary.subjBkc[subj] ?? 0, 0)}{" "}
+                    </span>
+                  ))})
+                </span>
+              </span>
               {summary.hasAkc && (
-                <span className="font-semibold text-purple-700">AKC: {fmtNum(summary.totalAkc, 1)} marks</span>
+                <span className="font-semibold text-purple-700">
+                  AKC: {fmtNum(summary.totalAkc, 1)} marks
+                  <span className="ml-1.5 font-normal text-xs">
+                    ({SUBJ_ABBR.map(([subj, abbr, cls]) => (
+                      <span key={subj} className={cls}>
+                        {abbr}:{fmtNum(summary.subjAkc[subj] ?? 0, 0)}{" "}
+                      </span>
+                    ))})
+                  </span>
+                </span>
               )}
               <span className="ml-auto text-surface-400 text-xs">{filtered.length} of {rows.length} questions</span>
             </div>

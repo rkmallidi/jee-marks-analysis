@@ -12,13 +12,14 @@ import { useExamSelector } from "@/hooks/useExamSelector";
 import ExamPicker from "@/components/ui/ExamPicker";
 import { cn } from "@/lib/utils";
 
-type UploadZoneType = "questions" | "responses" | "answer_key_bkc" | "answer_key_akc";
+type UploadZoneType = "questions" | "responses" | "omr_responses" | "answer_key_bkc" | "answer_key_akc";
 
 const ZONES: { type: UploadZoneType; label: string; icon: string; accept: string; desc: string }[] = [
-  { type: "questions",      label: "Question Paper", icon: "📋", accept: ".xlsx", desc: "Excel (.xlsx) — qno, subject, topic, question_type, marks, …" },
-  { type: "responses",      label: "OMR Responses",  icon: "📄", accept: ".csv",  desc: "CSV — admission_no column + question numbers as columns" },
-  { type: "answer_key_bkc", label: "BKC Answer Key", icon: "🔑", accept: ".csv", desc: "Base Key Correction CSV — qno, correct_answer, is_deleted" },
-  { type: "answer_key_akc", label: "AKC Answer Key", icon: "🗝️", accept: ".csv", desc: "Amendment Key Correction CSV — qno, correct_answer, is_deleted" },
+  { type: "questions",      label: "Question Paper",   icon: "📋", accept: ".xlsx",          desc: "Excel (.xlsx) — qno, subject, topic, question_type, marks, …" },
+  { type: "responses",      label: "OMR Responses",    icon: "📄", accept: ".csv",            desc: "CSV — admission_no column + question numbers as columns" },
+  { type: "omr_responses",  label: "OMR Scanner (.IIT)", icon: "🖨️", accept: ".iit,.txt,.csv", desc: "Scanner file — x, admission_no, v1, v2, … (-1000000 = blank)" },
+  { type: "answer_key_bkc", label: "BKC Answer Key",   icon: "🔑", accept: ".csv",            desc: "Base Key Correction CSV — qno, correct_answer, is_deleted" },
+  { type: "answer_key_akc", label: "AKC Answer Key",   icon: "🗝️", accept: ".csv",            desc: "Amendment Key Correction CSV — qno, correct_answer, is_deleted" },
 ];
 
 const JOB_STATUS_COLOR: Record<string, string> = {
@@ -76,6 +77,8 @@ export default function UploadConsolePage() {
           await uploadsApi.uploadQuestions(examId, safePaperCode, file, prog);
         else if (type === "responses")
           await uploadsApi.uploadResponses(examId, safePaperCode, file, prog);
+        else if (type === "omr_responses")
+          await uploadsApi.uploadOmrResponses(examId, safePaperCode, file, prog);
         else if (type === "answer_key_bkc")
           await uploadsApi.uploadAnswerKey(examId, safePaperCode, "BKC", file, prog);
         else if (type === "answer_key_akc")
@@ -155,7 +158,7 @@ export default function UploadConsolePage() {
       </p>
 
       {/* Upload zones */}
-      <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         {ZONES.map((zone) => (
           <DropZone
             key={zone.type}

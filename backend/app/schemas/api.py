@@ -257,12 +257,14 @@ class TopicHeatmapDashboard(BaseModel):
 # ── Dashboard: D5 Student Deep Dive ───────────────────────────────────────────
 
 class StudentDeepDive(BaseModel):
-    student:        StudentOut
-    exam_history:   list[dict[str, Any]]
-    subject_trends: list[dict[str, Any]]
-    topic_heatmap:  list[dict[str, Any]]
-    active_alerts:  list[dict[str, Any]]
-    rank_trajectory: list[dict[str, Any]]
+    student:          StudentOut
+    exam_history:     list[dict[str, Any]]
+    subject_trends:   list[dict[str, Any]]
+    topic_heatmap:    list[dict[str, Any]]
+    active_alerts:    list[dict[str, Any]]
+    rank_trajectory:  list[dict[str, Any]]
+    weak_topics:      list[dict[str, Any]] = []
+    rolling_averages: list[dict[str, Any]] = []
 
 
 # ── Alerts ─────────────────────────────────────────────────────────────────────
@@ -397,21 +399,33 @@ class FacultySectionOut(BaseModel):
 # ── Exams ──────────────────────────────────────────────────────────────────────
 
 class ExamCreate(BaseModel):
-    exam_code: str                          = Field(min_length=1, max_length=50)
-    title:     str                          = Field(min_length=1, max_length=200)
-    exam_date: date
-    exam_type: Literal["Mains", "Advanced"]
+    exam_code:     str                          = Field(min_length=1, max_length=50)
+    title:         str                          = Field(min_length=1, max_length=200)
+    exam_date:     date
+    exam_type:     Literal["Mains", "Advanced"]
+    program_name:  Optional[str]                = Field(default=None, max_length=50)
+    student_class: Optional[str]                = Field(default=None, max_length=30)
+
+
+class ExamUpdate(BaseModel):
+    title:         Optional[str]                          = Field(default=None, max_length=200)
+    exam_date:     Optional[date]                         = None
+    exam_type:     Optional[Literal["Mains", "Advanced"]] = None
+    program_name:  Optional[str]                          = Field(default=None, max_length=50)
+    student_class: Optional[str]                          = Field(default=None, max_length=30)
 
 
 class ExamOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    id:         int
-    exam_code:  str
-    title:      Optional[str]
-    exam_date:  Optional[date]
-    exam_type:  Optional[str]
-    created_at: datetime
-    papers:     list[str] = []
+    id:            int
+    exam_code:     str
+    title:         Optional[str]
+    exam_date:     Optional[date]
+    exam_type:     Optional[str]
+    program_name:  Optional[str]
+    student_class: Optional[str]
+    created_at:    datetime
+    papers:        list[str] = []
 
     @model_validator(mode="before")
     @classmethod
@@ -421,13 +435,15 @@ class ExamOut(BaseModel):
             return data
         if hasattr(data, "exam_paper_links"):
             return {
-                "id":         data.id,
-                "exam_code":  data.exam_code,
-                "title":      data.title,
-                "exam_date":  data.exam_date,
-                "exam_type":  data.exam_type,
-                "created_at": data.created_at,
-                "papers":     sorted(ep.paper_code for ep in (data.exam_paper_links or [])),
+                "id":            data.id,
+                "exam_code":     data.exam_code,
+                "title":         data.title,
+                "exam_date":     data.exam_date,
+                "exam_type":     data.exam_type,
+                "program_name":  data.program_name,
+                "student_class": data.student_class,
+                "created_at":    data.created_at,
+                "papers":        sorted(ep.paper_code for ep in (data.exam_paper_links or [])),
             }
         return data
 

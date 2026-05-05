@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import statistics as _stats
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.repositories.alert_repo import AlertRepository
@@ -15,32 +17,83 @@ class DashboardService:
         self._student_repo  = StudentRepository(session)
         self._alert_repo    = AlertRepository(session)
 
+    # ── Dimension resolver ──────────────────────────────────────────────────────
+
+    async def _resolve_admission_nos(
+        self,
+        branch_name:   str | None,
+        program_name:  str | None,
+        student_class: str | None,
+        section:       str | None,
+    ) -> list[str] | None:
+        """Return admission_nos matching the given dimension filters, or None (= no filter)."""
+        if not any([branch_name, program_name, student_class, section]):
+            return None
+        students, _ = await self._student_repo.list_students(
+            branch_name=branch_name,
+            program_name=program_name,
+            section=section,
+            status=None,
+            allowed_sections=None,
+            page=None,
+            page_size=None,
+            student_class=student_class,
+        )
+        return [s.admission_no for s in students]
+
+    @staticmethod
+    def _subject_avgs_from_summaries(subs: list) -> tuple[float, float, float, float]:
+        """Returns (physics_avg, chemistry_avg, maths_avg, total_avg) from subject summary rows."""
+        by_subj: dict[str, list[float]] = {}
+        for s in subs:
+            by_subj.setdefault(s.subject, []).append(float(s.marks or 0))
+        def avg(key: str) -> float:
+            v = by_subj.get(key, [])
+            return round(sum(v) / len(v), 2) if v else 0.0
+        phy  = avg("Physics")
+        chem = avg("Chemistry")
+        math = avg("Mathematics")
+        return phy, chem, math, round(phy + chem + math, 2)
+
     # ── D1 Overall ─────────────────────────────────────────────────────────────
 
-    async def get_overall(self, exam_id: int) -> dict | None:
+    async def get_overall(
+        self,
+        exam_id:       int,
+        branch_name:   str | None = None,
+        program_name:  str | None = None,
+        student_class: str | None = None,
+        section:       str | None = None,
+    ) -> dict | None:
         exam = await self._exam_repo.get_by_id(exam_id)
         if not exam:
             return None
 
-        agg           = await self._analytics.get_aggregate_for_exam(exam_id, "overall", "all")
-        physics_avg   = next((a.avg for a in agg if a.subject == "Physics"),     0.0) or 0.0
-        chemistry_avg = next((a.avg for a in agg if a.subject == "Chemistry"),   0.0) or 0.0
-        math_avg      = next((a.avg for a in agg if a.subject == "Mathematics"), 0.0) or 0.0
-        total_avg     = round(sum(a.avg or 0 for a in agg), 2)
+        allowed_nos = await self._resolve_admission_nos(
+            branch_name, program_name, student_class, section
+        )
 
-        stats = await self._analytics.get_exam_overall_stats(exam_id)
+        # Stats (scoped or full)
+        stats = await self._analytics.get_exam_stats_scoped(exam_id, allowed_nos)
 
-        branch_agg        = await self._analytics.get_branch_aggregates(exam_id)
-        branch_comparison = [
-            {
-                "branch":        bname,
-                "avg_total":     round(sum(r["avg"] or 0 for r in rows), 2),
-                "student_count": max((r["n_students"] or 0 for r in rows), default=0),
-            }
-            for bname, rows in branch_agg.items()
-        ]
+        # Subject averages
+        subs = await self._analytics.get_subject_summaries_for_exam(exam_id, allowed_nos)
+        physics_avg, chemistry_avg, math_avg, total_avg = self._subject_avgs_from_summaries(subs)
 
-        leaderboard  = await self._analytics.get_leaderboard(exam_id, limit=10)
+        # Branch comparison only makes sense at full scope
+        branch_comparison: list[dict] = []
+        if allowed_nos is None:
+            branch_agg = await self._analytics.get_branch_aggregates(exam_id)
+            branch_comparison = [
+                {
+                    "branch":        bname,
+                    "avg_total":     round(sum(r["avg"] or 0 for r in rows), 2),
+                    "student_count": max((r["n_students"] or 0 for r in rows), default=0),
+                }
+                for bname, rows in branch_agg.items()
+            ]
+
+        leaderboard  = await self._analytics.get_leaderboard(exam_id, limit=10, allowed_nos=allowed_nos)
         top_students = [
             {
                 "rank":         r["rank"],
@@ -51,7 +104,7 @@ class DashboardService:
             for r in leaderboard
         ]
 
-        dist      = await self._analytics.get_percentile_distribution(exam_id)
+        dist      = await self._analytics.get_percentile_distribution(exam_id, allowed_nos)
         histogram = [
             {
                 "bucket_start": r["bucket_min"],
@@ -66,9 +119,9 @@ class DashboardService:
             "exam_date":         exam.exam_date.isoformat() if exam.exam_date else None,
             "total_students":    stats["total_students"],
             "avg_total":         total_avg,
-            "avg_physics":       round(physics_avg, 2),
-            "avg_chemistry":     round(chemistry_avg, 2),
-            "avg_maths":         round(math_avg, 2),
+            "avg_physics":       physics_avg,
+            "avg_chemistry":     chemistry_avg,
+            "avg_maths":         math_avg,
             "max_total":         stats["max_total"],
             "min_total":         stats["min_total"],
             "pass_rate_pct":     stats["pass_rate_pct"],
@@ -77,30 +130,36 @@ class DashboardService:
             "histogram":         histogram,
         }
 
-    async def get_exam_trend(self, exam_id: int) -> list[dict]:
-        all_exams    = await self._exam_repo.list_exams()  # desc by date
+    async def get_exam_trend(
+        self,
+        exam_id:       int,
+        branch_name:   str | None = None,
+        program_name:  str | None = None,
+        student_class: str | None = None,
+        section:       str | None = None,
+    ) -> list[dict]:
+        allowed_nos   = await self._resolve_admission_nos(branch_name, program_name, student_class, section)
+        all_exams     = await self._exam_repo.list_exams()
         chronological = list(reversed(all_exams))
         idx           = next((i for i, e in enumerate(chronological) if e.id == exam_id), None)
         subset        = chronological[: (idx + 1) if idx is not None else len(chronological)]
 
         trend = []
         for exam in subset:
-            agg = await self._analytics.get_aggregate_for_exam(exam.id, "overall", "all")
-            if not agg:
+            stats = await self._analytics.get_exam_stats_scoped(exam.id, allowed_nos)
+            if not stats["total_students"]:
                 continue
-            physics_avg   = next((a.avg for a in agg if a.subject == "Physics"),     0.0) or 0.0
-            chemistry_avg = next((a.avg for a in agg if a.subject == "Chemistry"),   0.0) or 0.0
-            math_avg      = next((a.avg for a in agg if a.subject == "Mathematics"), 0.0) or 0.0
-            n_students    = max((a.n_students or 0 for a in agg), default=0)
+            subs = await self._analytics.get_subject_summaries_for_exam(exam.id, allowed_nos)
+            phy, chem, math, total_avg = self._subject_avgs_from_summaries(subs)
             trend.append({
-                "exam_id":       exam.id,
-                "exam_name":     exam.exam_code,
-                "exam_date":     exam.exam_date.isoformat() if exam.exam_date else None,
-                "avg_total":     round(sum(a.avg or 0 for a in agg), 2),
-                "avg_physics":   round(physics_avg, 2),
-                "avg_chemistry": round(chemistry_avg, 2),
-                "avg_maths":     round(math_avg, 2),
-                "total_students": n_students,
+                "exam_id":        exam.id,
+                "exam_name":      exam.exam_code,
+                "exam_date":      exam.exam_date.isoformat() if exam.exam_date else None,
+                "avg_total":      total_avg,
+                "avg_physics":    phy,
+                "avg_chemistry":  chem,
+                "avg_maths":      math,
+                "total_students": stats["total_students"],
             })
         return trend
 
@@ -112,7 +171,18 @@ class DashboardService:
         severity:              str | None,
         rule_key:              str | None,
         allowed_admission_nos: list[str] | None,
+        branch_name:           str | None = None,
+        program_name:          str | None = None,
+        student_class:         str | None = None,
+        section:               str | None = None,
     ) -> dict:
+        dim_nos = await self._resolve_admission_nos(branch_name, program_name, student_class, section)
+        if dim_nos is not None:
+            allowed_admission_nos = (
+                list(set(allowed_admission_nos) & set(dim_nos))
+                if allowed_admission_nos is not None
+                else dim_nos
+            )
         alerts = await self._alert_repo.list_alerts(
             exam_id=exam_id, severity=severity, rule_key=rule_key,
             acknowledged=False, allowed_admission_nos=allowed_admission_nos,
@@ -164,42 +234,50 @@ class DashboardService:
     # ── D3 Subject Analysis ─────────────────────────────────────────────────────
 
     async def get_subjects(
-        self, exam_id: int, scope: str, scope_value: str
+        self,
+        exam_id:       int,
+        scope:         str,
+        scope_value:   str,
+        branch_name:   str | None = None,
+        program_name:  str | None = None,
+        student_class: str | None = None,
+        section:       str | None = None,
     ) -> dict:
-        agg = await self._analytics.get_aggregate_for_exam(exam_id, scope, scope_value)
-        subjects = []
-        for row in agg:
-            all_subs = await self._analytics.get_subject_summaries_for_exam(exam_id)
-            subj_rows = [s for s in all_subs if s.subject == row.subject]
-            sorted_s  = sorted(subj_rows, key=lambda x: -x.marks)
+        allowed_nos = await self._resolve_admission_nos(branch_name, program_name, student_class, section)
+        all_subs    = await self._analytics.get_subject_summaries_for_exam(exam_id, allowed_nos)
 
-            top = []
+        by_subject: dict[str, list] = {}
+        for s in all_subs:
+            by_subject.setdefault(s.subject, []).append(s)
+
+        subjects = []
+        for subj_name, rows in sorted(by_subject.items()):
+            marks_list = [float(s.marks or 0) for s in rows]
+            acc_list   = [float(s.accuracy or 0) for s in rows]
+            sorted_s   = sorted(rows, key=lambda x: -(x.marks or 0))
+            n          = len(marks_list)
+
+            top, bot = [], []
             for sr in sorted_s[:3]:
                 student = await self._student_repo.get_by_admission_no(sr.admission_no)
                 if student:
                     top.append({"name": student.name, "marks": sr.marks, "accuracy": sr.accuracy})
-
-            bot = []
             for sr in sorted_s[-3:]:
                 student = await self._student_repo.get_by_admission_no(sr.admission_no)
                 if student:
                     bot.append({"name": student.name, "marks": sr.marks, "accuracy": sr.accuracy})
 
-            avg_accuracy_pct = (
-                round(sum(s.accuracy for s in subj_rows) / len(subj_rows) * 100, 2)
-                if subj_rows else 0.0
-            )
             subjects.append({
-                "subject":           row.subject,
-                "avg_marks":         row.avg,
-                "avg_accuracy_pct":  avg_accuracy_pct,
-                "median":            row.median,
-                "stdev":             row.stdev,
-                "min_score":         row.min_score,
-                "max_score":         row.max_score,
-                "n_students":        row.n_students,
-                "top_students":      top,
-                "bottom_students":   bot,
+                "subject":          subj_name,
+                "avg_marks":        round(sum(marks_list) / n, 2) if n else 0.0,
+                "avg_accuracy_pct": round(sum(acc_list) / n * 100, 2) if n else 0.0,
+                "median":           round(_stats.median(marks_list), 2) if n else 0.0,
+                "stdev":            round(_stats.stdev(marks_list), 2) if n > 1 else 0.0,
+                "min_score":        min(marks_list) if n else 0.0,
+                "max_score":        max(marks_list) if n else 0.0,
+                "n_students":       n,
+                "top_students":     top,
+                "bottom_students":  bot,
             })
 
         return {"exam_id": exam_id, "scope": scope, "scope_value": scope_value, "subjects": subjects}
@@ -211,7 +289,17 @@ class DashboardService:
         exam_id:       int,
         section:       str | None,
         admission_nos: list[str] | None,
+        branch_name:   str | None = None,
+        program_name:  str | None = None,
+        student_class: str | None = None,
     ) -> dict:
+        dim_nos = await self._resolve_admission_nos(branch_name, program_name, student_class, section)
+        if dim_nos is not None:
+            admission_nos = (
+                list(set(admission_nos) & set(dim_nos))
+                if admission_nos is not None
+                else dim_nos
+            )
         topic_rows = await self._analytics.get_topic_summaries_for_exam(exam_id, admission_nos)
 
         topics = sorted({t.topic for t in topic_rows})
@@ -423,6 +511,24 @@ class DashboardService:
             for a in alerts_db
         ]
 
+        rolling_avgs_db  = await self._analytics.get_rolling_averages(student.admission_no)
+        rolling_averages = [
+            {
+                "exam_type":  ra.exam_type,
+                "avg_score":  ra.avg_score,
+                "exam_count": ra.exam_count,
+                "updated_at": ra.updated_at.isoformat(),
+            }
+            for ra in rolling_avgs_db
+        ]
+
+        # Add is_absent flag to each exam history entry
+        for entry in exam_history:
+            sid = student.admission_no
+            eid = entry["exam_id"]
+            ses = await self._analytics.get_student_exam_summary(sid, eid)
+            entry["is_absent"] = ses.is_absent if ses else False
+
         return {
             "student": {
                 "admission_no":  student.admission_no,
@@ -440,4 +546,5 @@ class DashboardService:
             "weak_topics":     weak_topics,
             "rank_trajectory": rank_trajectory,
             "active_alerts":   active_alerts,
+            "rolling_averages": rolling_averages,
         }

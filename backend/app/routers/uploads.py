@@ -82,6 +82,30 @@ async def upload_responses(
     )
 
 
+@router.post("/omr-responses")
+async def upload_omr_responses(
+    file:         UploadFile,
+    exam_id:      int = Form(..., description="ID of the target exam"),
+    paper_code:   str = Form(..., description="Paper code: P1 or P2"),
+    current_user: CurrentUser  = Depends(require_role(["admin"])),
+    session:      AsyncSession = Depends(get_session),
+):
+    """Upload OMR scanner output file (.IIT format).
+
+    Line format:  x,<admission_no>,<v1>,<v2>,...
+      -1000000 = unattempted (blank)
+      0        = blank for option questions; valid answer "0" for numerical
+      1-5      = A-E for option questions; literal integer for numerical
+
+    Questions are matched positionally in ascending question-number order.
+    Accepts .IIT, .txt, or .csv files (all treated as plain comma-separated text).
+    """
+    data = await file.read()
+    return await UploadService(session, current_user.id).upload_omr_scanner(
+        data, file.filename or "omr.iit", exam_id, paper_code
+    )
+
+
 @router.get("/jobs", response_model=list[UploadJobOut])
 async def list_upload_jobs(
     exam_id: Optional[int]   = Query(None),

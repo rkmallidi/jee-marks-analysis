@@ -17,10 +17,10 @@ from app.engines.rule_engine import (
     NumericalDecimalEvaluator,
     NumericalIntEvaluator,
     NumericalRangeEvaluator,
-    NoNegativeEvaluator,
     PartialMCQEvaluator,
     QuestionRow,
     SCQEvaluator,
+    _correct_options_or,
     _parse_numerical,
     grade_response,
 )
@@ -48,30 +48,62 @@ def q(
 
 class TestParseNumerical:
     def test_exact_int(self):
-        assert _parse_numerical("42") == (42.0, None, None)
+        assert _parse_numerical("42") == [(42.0, None, None)]
 
     def test_exact_decimal(self):
-        exact, _, _ = _parse_numerical("3.14")
+        [(exact, _, _)] = _parse_numerical("3.14")
         assert exact == pytest.approx(3.14)
 
     def test_range(self):
-        exact, lo, hi = _parse_numerical("8.5:9.5")
+        [(exact, lo, hi)] = _parse_numerical("8.5:9.5")
         assert exact is None
         assert lo == pytest.approx(8.5)
         assert hi == pytest.approx(9.5)
 
     def test_negative_exact(self):
-        exact, _, _ = _parse_numerical("-5")
+        [(exact, _, _)] = _parse_numerical("-5")
         assert exact == pytest.approx(-5.0)
 
     def test_negative_range(self):
-        _, lo, hi = _parse_numerical("-3.0:-2.0")
+        [(_, lo, hi)] = _parse_numerical("-3.0:-2.0")
         assert lo == pytest.approx(-3.0)
         assert hi == pytest.approx(-2.0)
 
     def test_blank(self):
-        assert _parse_numerical(None) == (None, None, None)
-        assert _parse_numerical("") == (None, None, None)
+        assert _parse_numerical(None) == []
+        assert _parse_numerical("") == []
+
+    def test_or_two_exact(self):
+        result = _parse_numerical("8|10")
+        assert result == [(8.0, None, None), (10.0, None, None)]
+
+    def test_or_range_and_exact(self):
+        result = _parse_numerical("3:7|12")
+        assert result == [(None, 3.0, 7.0), (12.0, None, None)]
+
+    def test_or_three_values(self):
+        result = _parse_numerical("2|4|6")
+        assert result == [(2.0, None, None), (4.0, None, None), (6.0, None, None)]
+
+
+# ── _correct_options_or ──────────────────────────────────────────────────────
+
+class TestCorrectOptionsOr:
+    def test_single(self):
+        assert _correct_options_or("B") == [frozenset({"B"})]
+
+    def test_or_two(self):
+        assert _correct_options_or("A|C") == [frozenset({"A"}), frozenset({"C"})]
+
+    def test_or_three(self):
+        assert _correct_options_or("A|B|D") == [frozenset({"A"}), frozenset({"B"}), frozenset({"D"})]
+
+    def test_blank(self):
+        assert _correct_options_or(None) == []
+        assert _correct_options_or("") == []
+
+    def test_case_insensitive(self):
+        assert _correct_options_or("a|c") == [frozenset({"A"}), frozenset({"C"})]
 
 
 # ── SCQ ──────────────────────────────────────────────────────────────────────
@@ -116,6 +148,24 @@ class TestSCQEvaluator:
     def test_custom_marks(self):
         r = self._grade("A", "A", pos=3.0)
         assert r.marks_awarded == pytest.approx(3.0)
+
+    def test_or_first_option_correct(self):
+        r = self._grade("A", "A|C")
+        assert r.verdict == "correct"
+        assert r.marks_awarded == pytest.approx(4.0)
+
+    def test_or_second_option_correct(self):
+        assert self._grade("C", "A|C").verdict == "correct"
+
+    def test_or_unrelated_wrong(self):
+        r = self._grade("B", "A|C")
+        assert r.verdict == "wrong"
+        assert r.marks_awarded == pytest.approx(-1.0)
+
+    def test_or_three_options(self):
+        assert self._grade("B", "A|B|D").verdict == "correct"
+        assert self._grade("D", "A|B|D").verdict == "correct"
+        assert self._grade("C", "A|B|D").verdict == "wrong"
 
 
 # ── MCQ / MCQ_MULTI ───────────────────────────────────────────────────────────
@@ -203,6 +253,23 @@ class TestNumericalIntEvaluator:
 
     def test_negative_answer(self):
         r = self.ev.grade("-5", q("NUMERICAL_INT", correct_option="-5"))
+        assert r.verdict == "correct"
+
+    def test_or_first_value_correct(self):
+        r = self.ev.grade("8", q("NUMERICAL_INT", neg=0.0, correct_option="8|10"))
+        assert r.verdict == "correct"
+        assert r.marks_awarded == pytest.approx(4.0)
+
+    def test_or_second_value_correct(self):
+        r = self.ev.grade("10", q("NUMERICAL_INT", neg=0.0, correct_option="8|10"))
+        assert r.verdict == "correct"
+
+    def test_or_middle_value_wrong(self):
+        r = self.ev.grade("9", q("NUMERICAL_INT", neg=0.0, correct_option="8|10"))
+        assert r.verdict == "wrong"
+
+    def test_or_range_and_exact(self):
+        r = self.ev.grade("12", q("NUMERICAL_INT", neg=0.0, correct_option="3:7|12"))
         assert r.verdict == "correct"
 
 
@@ -307,10 +374,10 @@ class TestPartialMCQEvaluator:
         assert self._grade("ABC", correct="AB").verdict == "wrong"
 
 
-# ── NO_NEGATIVE ───────────────────────────────────────────────────────────────
+# ── NO_NEGATIVE (legacy alias → SCQEvaluator) ────────────────────────────────
 
 class TestNoNegativeEvaluator:
-    ev = NoNegativeEvaluator()
+    ev = SCQEvaluator()
 
     def test_correct(self):
         r = self.ev.grade("C", q("NO_NEGATIVE", correct_option="C"))
@@ -318,7 +385,7 @@ class TestNoNegativeEvaluator:
         assert r.verdict == "correct"
 
     def test_wrong_no_deduction(self):
-        r = self.ev.grade("A", q("NO_NEGATIVE", neg=2.0, correct_option="C"))
+        r = self.ev.grade("A", q("NO_NEGATIVE", neg=0.0, correct_option="C"))
         assert r.marks_awarded == pytest.approx(0.0)
         assert r.verdict == "wrong"
 
@@ -395,9 +462,10 @@ class TestGradeResponseDispatcher:
     def test_deleted_gives_bonus(self):
         assert grade_response("B", q("DELETED", pos=4.0)).verdict == "bonus"
 
-    def test_unknown_type_raises(self):
-        with pytest.raises(KeyError):
-            grade_response("A", q("BOGUS", correct_option="A"))
+    def test_unknown_type_returns_blank(self):
+        r = grade_response("A", q("BOGUS", correct_option="A"))
+        assert r.verdict == "blank"
+        assert r.marks_awarded == pytest.approx(0.0)
 
 
 # ── Normalisation edge-cases ──────────────────────────────────────────────────

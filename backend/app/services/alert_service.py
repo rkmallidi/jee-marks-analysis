@@ -12,6 +12,7 @@ from app.engines.alert_engine import (
 )
 from app.repositories.alert_repo import AlertRepository
 from app.repositories.analytics_repo import AnalyticsRepository
+from app.repositories.exam_repo import ExamRepository
 from app.repositories.student_repo import StudentRepository
 
 
@@ -20,6 +21,7 @@ class AlertService:
         self._alert_repo    = AlertRepository(session)
         self._analytics     = AnalyticsRepository(session)
         self._student_repo  = StudentRepository(session)
+        self._exam_repo     = ExamRepository(session)
 
     async def run_for_exam(self, exam_id: int) -> int:
         """Run all alert rules. Returns number of alert records upserted."""
@@ -28,10 +30,21 @@ class AlertService:
         if not current_db:
             return 0
 
-        all_sids = [s.admission_no for s in current_db]
+        exam      = await self._exam_repo.get_by_id(exam_id)
+        exam_type = exam.exam_type if exam else None
+
+        # Only alert on present students (not absent)
+        all_sids = [s.admission_no for s in current_db if not s.is_absent]
+        if not all_sids:
+            return 0
+
+        # Build exam_type lookup across all historic exams seen in topic history
+        exam_type_cache: dict[int, str | None] = {exam_id: exam_type}
 
         current_summaries: dict[str, HistoricalSummary] = {}
         for s in current_db:
+            if s.is_absent:
+                continue
             student = await self._student_repo.get_by_admission_no(s.admission_no)
             if student:
                 current_summaries[s.admission_no] = HistoricalSummary(
@@ -46,7 +59,7 @@ class AlertService:
             hist_db = await self._analytics.get_student_history(sid, limit=5)
             rows = []
             for h in hist_db:
-                if h.exam_id == exam_id:
+                if h.exam_id == exam_id or h.is_absent:
                     continue
                 student = await self._student_repo.get_by_admission_no(sid)
                 if student:
@@ -61,17 +74,23 @@ class AlertService:
         topic_history: dict[str, list[TopicHistory]] = {}
         for sid in all_sids:
             topic_db = await self._analytics.get_student_topic_history(sid)
-            topic_history[sid] = [
-                TopicHistory(
+            rows = []
+            for t in topic_db:
+                if t.exam_id not in exam_type_cache:
+                    ex = await self._exam_repo.get_by_id(t.exam_id)
+                    exam_type_cache[t.exam_id] = ex.exam_type if ex else None
+                rows.append(TopicHistory(
                     admission_no=t.admission_no, exam_id=t.exam_id,
                     topic=t.topic, subject=t.subject,
                     accuracy=t.accuracy, attempted=t.attempted, correct=t.correct,
-                )
-                for t in topic_db
-            ]
+                    exam_type=exam_type_cache.get(t.exam_id),
+                ))
+            topic_history[sid] = rows
 
         branch_groups: dict[str, list[float]] = {}
         for s in current_db:
+            if s.is_absent:
+                continue
             student = await self._student_repo.get_by_admission_no(s.admission_no)
             if student:
                 branch_groups.setdefault(student.branch_name, []).append(s.total_marks)
@@ -85,7 +104,8 @@ class AlertService:
         }
 
         ctx = AlertContext(
-            exam_id=exam_id, student_ids=all_sids,
+            exam_id=exam_id, exam_type=exam_type,
+            student_ids=all_sids,
             current_summaries=current_summaries,
             historical=historical, topic_history=topic_history,
             branch_stats=branch_stats, config=config,

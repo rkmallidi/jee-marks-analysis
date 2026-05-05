@@ -28,11 +28,13 @@ class TopicHistory:
     accuracy:     float
     attempted:    int
     correct:      int
+    exam_type:    str | None = None   # "Mains" or "Advanced" — for type-segregated streak detection
 
 
 @dataclass
 class AlertContext:
     exam_id:           int
+    exam_type:         str | None         # "Mains" or "Advanced"
     student_ids:       list[str]
     current_summaries: dict[str, HistoricalSummary]
     historical:        dict[str, list[HistoricalSummary]]  # newest-first
@@ -273,6 +275,72 @@ class ConsistentlyLowRule:
         return out
 
 
+class SubtopicConsecutiveWeaknessRule:
+    """
+    Fires when a student has been below accuracy_threshold in the same topic
+    for min_streak or more consecutive exams of the same type (Mains / Advanced
+    evaluated independently). Uses exam_type on TopicHistory.
+    """
+    rule_key = "subtopic_consecutive_weakness"
+
+    def evaluate(self, ctx: AlertContext) -> list[AlertRecord]:
+        cfg           = ctx.config.get(self.rule_key, {})
+        acc_threshold = float(cfg.get("accuracy_threshold", 0.40))
+        min_streak    = int(cfg.get("min_streak", 2))
+        current_type  = ctx.exam_type
+
+        out: list[AlertRecord] = []
+        for sid in ctx.student_ids:
+            by_topic: dict[str, list[TopicHistory]] = {}
+            for tr in ctx.topic_history.get(sid, []):
+                if current_type and tr.exam_type and tr.exam_type != current_type:
+                    continue
+                by_topic.setdefault(tr.topic, []).append(tr)
+
+            weak_streaks: list[dict] = []
+            for topic, rows in by_topic.items():
+                # Sort newest-first
+                sorted_rows = sorted(rows, key=lambda r: r.exam_id, reverse=True)
+                streak = 0
+                for r in sorted_rows:
+                    if r.attempted == 0:
+                        break
+                    if r.correct / r.attempted < acc_threshold:
+                        streak += 1
+                    else:
+                        break
+                if streak >= min_streak:
+                    latest   = sorted_rows[0]
+                    accuracy = latest.correct / max(latest.attempted, 1)
+                    weak_streaks.append({
+                        "topic":    topic,
+                        "subject":  latest.subject,
+                        "streak":   streak,
+                        "accuracy": round(accuracy, 4),
+                    })
+
+            if not weak_streaks:
+                continue
+
+            weak_streaks.sort(key=lambda w: w["accuracy"])
+            worst = weak_streaks[0]
+            out.append(AlertRecord(
+                admission_no=sid, exam_id=ctx.exam_id,
+                rule_key=self.rule_key, severity="warning",
+                title=f"Consecutive topic weakness: {worst['topic']}",
+                message=(
+                    f"Weak in '{worst['topic']}' for {worst['streak']} consecutive "
+                    f"{current_type or 'exam'} exams (accuracy {worst['accuracy']:.0%})."
+                ),
+                context_json={
+                    "weak_streaks": weak_streaks,
+                    "exam_type":    current_type,
+                    "min_streak":   min_streak,
+                },
+            ))
+        return out
+
+
 # ── Runner ─────────────────────────────────────────────────────────────────────
 
 ALERT_RULES: list[AlertRule] = [
@@ -280,6 +348,7 @@ ALERT_RULES: list[AlertRule] = [
     WeakTopicRule(),
     BelowBranchAvgRule(),
     ConsistentlyLowRule(),
+    SubtopicConsecutiveWeaknessRule(),
 ]
 
 

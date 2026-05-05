@@ -7,9 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.engines.analytics_engine import AnalyticsBundle
 from app.models.orm import (
     AggregateSummary,
+    Exam,
     RankAudit,
     RankSummary,
     Result,
+    RollingAverage,
     StudentExamSummary,
     StudentSubjectSummary,
     StudentTopicSummary,
@@ -100,6 +102,27 @@ class AnalyticsRepository:
         )
         return list(r.scalars().all())
 
+    async def get_student_history_by_type(
+        self, admission_no: str, exam_type: str
+    ) -> list[StudentExamSummary]:
+        """All exam summaries for a student filtered to a specific exam type, oldest-first."""
+        r = await self._s.execute(
+            select(StudentExamSummary)
+            .join(Exam, StudentExamSummary.exam_id == Exam.id)
+            .where(
+                StudentExamSummary.admission_no == admission_no,
+                Exam.exam_type == exam_type,
+            )
+            .order_by(StudentExamSummary.exam_id.asc())
+        )
+        return list(r.scalars().all())
+
+    async def get_rolling_averages(self, admission_no: str) -> list[RollingAverage]:
+        r = await self._s.execute(
+            select(RollingAverage).where(RollingAverage.admission_no == admission_no)
+        )
+        return list(r.scalars().all())
+
     async def get_aggregate_for_exam(
         self,
         exam_id:     int,
@@ -186,19 +209,24 @@ class AnalyticsRepository:
 
     # ── PostgreSQL CTE-powered leaderboard ─────────────────────────────────────
     async def get_leaderboard(
-        self, exam_id: int, limit: int = 10, offset: int = 0
+        self, exam_id: int, limit: int = 10, offset: int = 0,
+        allowed_nos: list[str] | None = None,
     ) -> list[dict]:
         """
         Uses a PostgreSQL CTE with DENSE_RANK() window function to return
         the top-N students for a given exam with their rank computed in-DB.
-        Includes subject-wise marks aggregated from student_subject_summary.
+        When allowed_nos is provided, ranks are recomputed within that set.
         """
-        sql = text("""
+        scope_filter = "AND ses.admission_no = ANY(:allowed_nos)" if allowed_nos is not None else ""
+        sql = text(f"""
             WITH ranked AS (
                 SELECT
                     ses.admission_no,
                     s.name,
                     s.branch_name,
+                    s.program_name,
+                    s.student_class,
+                    s.section,
                     ses.total_marks,
                     ses.negative_marks,
                     ses.percentile_overall,
@@ -213,13 +241,16 @@ class AnalyticsRepository:
                     ) AS rank
                 FROM student_exam_summary ses
                 JOIN students s ON s.admission_no = ses.admission_no
-                WHERE ses.exam_id = :exam_id
+                WHERE ses.exam_id = :exam_id {scope_filter}
             ),
             with_subjects AS (
                 SELECT
                     ranked.admission_no,
                     ranked.name,
                     ranked.branch_name,
+                    ranked.program_name,
+                    ranked.student_class,
+                    ranked.section,
                     ranked.total_marks,
                     ranked.negative_marks,
                     ranked.percentile_overall,
@@ -245,11 +276,14 @@ class AnalyticsRepository:
                     ) AS maths_marks
                 FROM ranked
             )
-            SELECT 
+            SELECT
                 rank,
                 admission_no,
                 name,
                 branch_name,
+                program_name,
+                student_class,
+                section,
                 total_marks,
                 physics_marks,
                 chemistry_marks,
@@ -261,15 +295,18 @@ class AnalyticsRepository:
             ORDER BY rank
             LIMIT :limit OFFSET :offset
         """)
-        r = await self._s.execute(sql, {"exam_id": exam_id, "limit": limit, "offset": offset})
+        params: dict = {"exam_id": exam_id, "limit": limit, "offset": offset}
+        if allowed_nos is not None:
+            params["allowed_nos"] = allowed_nos
+        r = await self._s.execute(sql, params)
         return [dict(row._mapping) for row in r.all()]
 
-    async def get_percentile_distribution(self, exam_id: int) -> list[dict]:
-        """
-        Returns a histogram of score distribution using PostgreSQL
-        WIDTH_BUCKET to bin scores into 10 equal-width buckets.
-        """
-        sql = text("""
+    async def get_percentile_distribution(
+        self, exam_id: int, allowed_nos: list[str] | None = None
+    ) -> list[dict]:
+        """Score distribution histogram. Scoped to allowed_nos when provided."""
+        scope_filter = "AND admission_no = ANY(:allowed_nos)" if allowed_nos is not None else ""
+        sql = text(f"""
             SELECT
                 WIDTH_BUCKET(total_marks, min_s, max_s + 0.001, 10) AS bucket,
                 MIN(total_marks) AS bucket_min,
@@ -277,12 +314,16 @@ class AnalyticsRepository:
                 COUNT(*) AS student_count
             FROM student_exam_summary,
                  (SELECT MIN(total_marks) AS min_s, MAX(total_marks) AS max_s
-                  FROM student_exam_summary WHERE exam_id = :exam_id) bounds
-            WHERE exam_id = :exam_id
+                  FROM student_exam_summary
+                  WHERE exam_id = :exam_id {scope_filter}) bounds
+            WHERE exam_id = :exam_id {scope_filter}
             GROUP BY bucket
             ORDER BY bucket
         """)
-        r = await self._s.execute(sql, {"exam_id": exam_id})
+        params: dict = {"exam_id": exam_id}
+        if allowed_nos is not None:
+            params["allowed_nos"] = allowed_nos
+        r = await self._s.execute(sql, params)
         return [dict(row._mapping) for row in r.all()]
 
     async def get_exam_overall_stats(self, exam_id: int) -> dict:
@@ -305,6 +346,29 @@ class AnalyticsRepository:
             "max_total":      float(row["max_total"] or 0),
             "total_students": total,
             "pass_rate_pct":  round((row["pass_count"] or 0) / total * 100, 1),
+        }
+
+    async def get_exam_stats_scoped(
+        self, exam_id: int, admission_nos: list[str] | None
+    ) -> dict:
+        """Compute live exam stats for a scoped set of students (or all if None)."""
+        q = select(StudentExamSummary).where(StudentExamSummary.exam_id == exam_id)
+        if admission_nos is not None:
+            q = q.where(StudentExamSummary.admission_no.in_(admission_nos))
+        r    = await self._s.execute(q)
+        rows = list(r.scalars().all())
+        if not rows:
+            return {"avg_total": 0.0, "max_total": 0.0, "min_total": 0.0,
+                    "total_students": 0, "pass_rate_pct": 0.0}
+        total      = len(rows)
+        marks_list = [row.total_marks for row in rows]
+        pass_count = sum(1 for row in rows if (row.percentage or 0) >= 35)
+        return {
+            "avg_total":      round(sum(marks_list) / total, 2),
+            "max_total":      float(max(marks_list)),
+            "min_total":      float(min(marks_list)),
+            "total_students": total,
+            "pass_rate_pct":  round(pass_count / total * 100, 1),
         }
 
     async def get_paper_results_for_student(

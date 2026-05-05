@@ -34,11 +34,16 @@ export default function ExamPicker({ examId, onChange }: Props) {
       <select
         value={examId}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="input w-56 py-1.5"
+        className="input w-80 py-1.5"
       >
         {exams.map((exam) => (
           <option key={exam.id} value={exam.id}>
-            {exam.exam_code} {exam.title ? `— ${exam.title}` : ""} {exam.exam_date ? `(${exam.exam_date})` : ""}
+            {exam.exam_code}
+            {exam.title ? ` — ${exam.title}` : ""}
+            {exam.program_name ? ` [${exam.program_name}` : ""}
+            {exam.program_name && exam.student_class ? ` · ${exam.student_class}` : ""}
+            {exam.program_name ? `]` : ""}
+            {exam.exam_date ? ` (${exam.exam_date})` : ""}
           </option>
         ))}
       </select>

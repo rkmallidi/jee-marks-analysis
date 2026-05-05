@@ -29,11 +29,12 @@ export default function StudentDeepDivePage() {
   if (isError || !data) return <ErrorBanner onRetry={refetch} />;
 
   const { student: s } = data;
-  const history   = data.exam_history   ?? [];
-  const rankTraj  = data.rank_trajectory ?? [];
-  const subjTrends = data.subject_trends  ?? [];
-  const weakTopics = data.weak_topics     ?? [];
-  const alerts     = data.active_alerts   ?? [];
+  const history      = data.exam_history    ?? [];
+  const rankTraj     = data.rank_trajectory ?? [];
+  const subjTrends   = data.subject_trends  ?? [];
+  const weakTopics   = data.weak_topics     ?? [];
+  const alerts       = data.active_alerts   ?? [];
+  const rollingAvgs  = data.rolling_averages ?? [];
 
   // ── Compute summary stats from available data ──────────────────────────────
   const latest     = history[history.length - 1];
@@ -179,6 +180,37 @@ export default function StudentDeepDivePage() {
             ) : (
               <p className="text-center text-surface-400 py-16 text-sm">Need at least 2 exams for trend.</p>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Rolling averages */}
+      {rollingAvgs.length > 0 && (
+        <div className="card">
+          <p className="section-title mb-4">Rolling Averages</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            {rollingAvgs.map((ra) => (
+              <div
+                key={ra.exam_type}
+                className={`rounded-xl p-4 border text-center ${
+                  ra.exam_type === "Advanced"
+                    ? "bg-purple-50 border-purple-200"
+                    : "bg-sky-50 border-sky-200"
+                }`}
+              >
+                <p className={`text-[10px] font-extrabold uppercase tracking-widest mb-1 ${
+                  ra.exam_type === "Advanced" ? "text-purple-500" : "text-sky-500"
+                }`}>
+                  {ra.exam_type === "Advanced" ? "JEE Advanced" : "JEE Mains"}
+                </p>
+                <p className="text-2xl font-extrabold text-surface-900">
+                  {fmtNum(ra.avg_score, 1)}
+                </p>
+                <p className="text-xs text-surface-400 mt-1">
+                  avg over {ra.exam_count} exam{ra.exam_count !== 1 ? "s" : ""}
+                </p>
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -594,6 +626,11 @@ export default function StudentDeepDivePage() {
                       {h.exam_type && (
                         <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${h.exam_type === "Advanced" ? "bg-purple-400/30 text-purple-100" : "bg-sky-400/30 text-sky-100"}`}>
                           {h.exam_type}
+                        </span>
+                      )}
+                      {h.is_absent && (
+                        <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-red-500/40 text-red-100 border border-red-400/30">
+                          ABSENT
                         </span>
                       )}
                       {h.papers.map((p) => (

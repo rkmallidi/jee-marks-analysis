@@ -5,13 +5,14 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { dashboardApi, WeakStudentEntry } from "@/lib/api";
+import { dashboardApi, WeakStudentEntry, DimensionParams } from "@/lib/api";
 import { fmtNum } from "@/lib/utils";
 import { PageLoader } from "@/components/ui/LoadingSpinner";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import SeverityBadge from "@/components/ui/SeverityBadge";
 import ExamPicker from "@/components/ui/ExamPicker";
 import EmptyState from "@/components/ui/EmptyState";
+import DimensionFilter from "@/components/ui/DimensionFilter";
 import { useExamSelector } from "@/hooks/useExamSelector";
 
 type FilterSeverity = "all" | "critical" | "warning" | "info";
@@ -25,11 +26,12 @@ const RULE_LABEL: Record<string, string> = {
 
 export default function DashboardWeakStudentsPage() {
   const { examId, resolvedExamId, setExamId } = useExamSelector();
-  const [filter, setFilter]   = useState<FilterSeverity>("all");
+  const [filter, setFilter] = useState<FilterSeverity>("all");
+  const [dims, setDims]     = useState<DimensionParams>({});
 
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["weak-students", resolvedExamId],
-    queryFn: () => dashboardApi.weakStudents(resolvedExamId!).then((r) => r.data),
+    queryKey: ["weak-students", resolvedExamId, dims],
+    queryFn: () => dashboardApi.weakStudents(resolvedExamId!, dims).then((r) => r.data),
     enabled: resolvedExamId !== null,
   });
 
@@ -57,6 +59,8 @@ export default function DashboardWeakStudentsPage() {
         </div>
         <ExamPicker examId={examId} onChange={setExamId} />
       </div>
+
+      <DimensionFilter value={dims} onChange={setDims} />
 
       {/* Summary KPIs */}
       <div className="grid grid-cols-3 gap-4">

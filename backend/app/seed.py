@@ -101,6 +101,14 @@ ALERT_CONFIGS = [
             "description": "Alert when student stays in the bottom 20th percentile for 3 consecutive exams",
         },
     },
+    {
+        "rule_key": "subtopic_consecutive_weakness",
+        "config_json": {
+            "accuracy_threshold": 0.40,
+            "min_streak": 2,
+            "description": "Alert when student is weak in same topic for 2+ consecutive exams of the same type",
+        },
+    },
 ]
 
 

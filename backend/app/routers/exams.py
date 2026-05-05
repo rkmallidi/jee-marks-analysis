@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
 from app.dependencies import CurrentUser, require_role
-from app.schemas.api import ExamCreate, ExamOut
+from app.schemas.api import ExamCreate, ExamOut, ExamUpdate
 from app.services.exam_service import ExamService
 
 router = APIRouter(prefix="/exams", tags=["exams"])
@@ -27,6 +27,17 @@ async def list_exams(
     session: AsyncSession = Depends(get_session),
 ):
     return await ExamService(session).list_exams()
+
+
+@router.patch("/{exam_id}", response_model=ExamOut)
+async def update_exam(
+    exam_id: int,
+    data: ExamUpdate,
+    _: CurrentUser = Depends(require_role(["admin"])),
+    session: AsyncSession = Depends(get_session),
+):
+    """Update exam metadata. exam_code cannot be changed."""
+    return await ExamService(session).update_exam(exam_id, data)
 
 
 @router.get("/{exam_id}/papers", response_model=list[str])

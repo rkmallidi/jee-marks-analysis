@@ -13,7 +13,7 @@ from app.repositories.student_repo import StudentRepository
 from app.validators.answer_key_validator import AnswerKeyValidator, _parse_bool
 from app.validators.base import ValidationResult
 from app.validators.question_validator import QuestionValidator
-from app.validators.response_validator import ResponseValidator
+from app.validators.response_validator import ResponseValidator, convert_option_answer
 from app.validators.student_validator import StudentValidator
 
 _SAFE_STR = lambda v: None if (v is None or (isinstance(v, float) and pd.isna(v))) else str(v).strip() or None
@@ -152,9 +152,11 @@ class UploadService:
             sub_topic  = _SAFE_STR(row.get("sub_topic"))
             q_type     = str(row["question_type"]).strip()
             pos_marks  = float(row["marks"])
-            neg_marks  = float(row["negative_marks"])
+            neg_marks  = abs(float(row["negative_marks"]))  # accept -1 or 1
             part_marks = _SAFE_FLT(row.get("partial_marks"), 0.0)
             correct    = _SAFE_STR(row.get("correct_answer"))
+            if correct:
+                correct = convert_option_answer(correct, q_type)
             difficulty = _SAFE_STR(row.get("difficulty"))
             is_del     = raw_del in ("y", "yes", "true", "1")
 
@@ -237,6 +239,9 @@ class UploadService:
             if not question:
                 continue
 
+            if correct_ans:
+                correct_ans = convert_option_answer(correct_ans, question.question_type)
+
             if key_type == "BKC":
                 question.correct_option_bkc = correct_ans
                 question.is_deleted_bkc     = deleted
@@ -302,6 +307,99 @@ class UploadService:
                         "exam_id":      exam_id,
                         "response_raw": resp,
                     })
+
+        if response_rows:
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
+            stmt = pg_insert(OmrResponse).values(response_rows)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["admission_no", "question_id"],
+                set_={"response_raw": stmt.excluded.response_raw,
+                      "exam_id":      stmt.excluded.exam_id},
+            )
+            await self._s.execute(stmt)
+
+        await self._s.flush()
+        return job
+
+    # ── OMR scanner responses ─────────────────────────────────────────────────
+
+    async def upload_omr_scanner(
+        self, file_bytes: bytes, filename: str, exam_id: int, paper_code: str
+    ) -> UploadJob:
+        """Parse OMR scanner text format and store responses.
+
+        Line format:  x,<admission_no>,<v1>,<v2>,...
+          -1000000  → blank / unattempted (skipped for all question types)
+          0         → blank for option questions; valid answer "0" for numerical
+          1-5       → A-E for option questions; literal integer for numerical
+        """
+        from app.validators.response_validator import OmrScannerValidator, omr_to_response
+
+        auth_vr, exam, _ = await self._check_exam_paper(
+            exam_id, paper_code, filename, "omr_responses"
+        )
+        if not auth_vr.is_valid:
+            return await self._record_job("omr_responses", filename, auth_vr, 0, 0)
+
+        questions = await self._exam_repo.get_questions_for_paper(exam_id, paper_code)
+        if not questions:
+            vr = ValidationResult()
+            vr.add(0, "questions", "No questions found for this exam paper — upload questions first")
+            return await self._record_job("omr_responses", filename, vr, 0, 0)
+
+        # Positional order must match question_no ascending
+        questions_sorted = sorted(questions, key=lambda q: q.question_no)
+        ordered_qtypes   = [q.question_type for q in questions_sorted]
+
+        valid_admissions = await self._student_repo.get_existing_admission_nos()
+
+        lines = file_bytes.decode("utf-8", errors="replace").splitlines()
+
+        # Count student lines for job tracking
+        student_lines = [
+            ln for ln in lines
+            if ln.strip().split(",")[0].strip().lower() == "x"
+        ]
+
+        validator = OmrScannerValidator(valid_admissions, ordered_qtypes)
+        result    = validator.validate(lines)
+        job       = await self._record_job(
+            "omr_responses", filename, result, len(student_lines), len(student_lines)
+        )
+        if not result.is_valid:
+            return job
+
+        response_rows: list[dict] = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            parts = [p.strip() for p in line.split(",")]
+            if parts and parts[-1] == "":
+                parts = parts[:-1]
+            if not parts or parts[0].lower() != "x":
+                continue
+
+            adm       = parts[1].upper()
+            val_parts = parts[2:]
+
+            for pos, raw in enumerate(val_parts):
+                try:
+                    val = int(raw)
+                except ValueError:
+                    continue
+
+                q    = questions_sorted[pos]
+                resp = omr_to_response(val, q.question_type)
+                if resp is None:
+                    continue
+
+                response_rows.append({
+                    "admission_no": adm,
+                    "question_id":  q.id,
+                    "exam_id":      exam_id,
+                    "response_raw": resp,
+                })
 
         if response_rows:
             from sqlalchemy.dialects.postgresql import insert as pg_insert

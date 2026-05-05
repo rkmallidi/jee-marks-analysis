@@ -28,6 +28,17 @@ def _blank(val) -> bool:
     return val is None or (isinstance(val, float) and pd.isna(val)) or str(val).strip() == ""
 
 
+def _is_valid_scq_option(seg: str) -> bool:
+    """A valid SCQ option segment is a single letter (A-Z) or a positive integer (1, 2, 3…)."""
+    s = seg.strip().upper()
+    if len(s) == 1 and s.isalpha():
+        return True
+    try:
+        return int(s) > 0
+    except ValueError:
+        return False
+
+
 def _is_numerical_range(val: str) -> bool:
     """Check if value is a valid range string like '8.5:9.5' or '-3.0:-2.0'."""
     s = val.strip()
@@ -47,13 +58,13 @@ class QuestionValidator:
     Validates question upload Excel.
 
     All answer data is stored in the correct_answer column:
-      SCQ / NO_NEGATIVE     →  single option letter, e.g. "B"
-      MCQ / MCQ_MULTI       →  option letters, e.g. "ABD"
-      PARTIAL_MCQ           →  option letters + partial_marks column
-      NUMERICAL_INT         →  exact integer "42"  OR  range "3:7"
-      NUMERICAL_DECIMAL     →  exact decimal "3.14"  OR  range "9.95:10.05"
-      NUMERICAL_RANGE       →  range "8.5:9.5"
-      DELETED               →  no answer required
+      SCQ               →  single option letter "B" or number "1", or OR "A|C" / "1|3"
+      MCQ / MCQ_MULTI   →  option letters, e.g. "ABD"
+      PARTIAL_MCQ       →  option letters + partial_marks column
+      NUMERICAL_INT     →  exact integer "42", range "3:7", or OR "8|10"
+      NUMERICAL_DECIMAL →  exact decimal "3.14", range "9.95:10.05", or OR "1.5|2.5"
+      NUMERICAL_RANGE   →  range "8.5:9.5", or OR "8.5:9.5|11.0:12.0"
+      DELETED           →  no answer required
     """
 
     def validate(self, df: pd.DataFrame) -> ValidationResult:
@@ -96,12 +107,9 @@ class QuestionValidator:
             # ── marks ─────────────────────────────────────────────────────────
             try:
                 pos = float(row["marks"])
-                neg = float(row["negative_marks"])
+                neg = abs(float(row["negative_marks"]))  # accept -1 or 1; stored as positive
                 if pos < 0:
                     result.add(row_num, "marks", "Must be ≥ 0")
-                if neg < 0:
-                    result.add(row_num, "negative_marks",
-                               "Must be ≥ 0 (stored positive, applied as penalty)")
                 if neg > pos:
                     result.add(row_num, "negative_marks",
                                f"negative_marks ({neg}) > marks ({pos}) — please review")
@@ -131,26 +139,50 @@ class QuestionValidator:
                     continue
                 ca_str = str(ca).strip()
 
-                if qtype == "NUMERICAL_INT":
-                    if not _is_numerical_range(ca_str):
-                        try:
-                            int(round(float(ca_str)))
-                        except ValueError:
+                if qtype == "SCQ":
+                    for seg in ca_str.split("|"):
+                        if not _is_valid_scq_option(seg):
                             result.add(row_num, "correct_answer",
-                                       'NUMERICAL_INT: use an integer "42" or range "3:7"')
+                                       'SCQ: use a single option "A" or number "1", or OR "A|C"')
+                            break
+
+                elif qtype == "NUMERICAL_INT":
+                    for seg in ca_str.split("|"):
+                        seg = seg.strip()
+                        if not seg:
+                            result.add(row_num, "correct_answer",
+                                       'NUMERICAL_INT: empty segment in OR expression')
+                            break
+                        if not _is_numerical_range(seg):
+                            try:
+                                int(round(float(seg)))
+                            except ValueError:
+                                result.add(row_num, "correct_answer",
+                                           'NUMERICAL_INT: use integer "42", range "3:7", or OR "8|10"')
+                                break
 
                 elif qtype == "NUMERICAL_DECIMAL":
-                    if not _is_numerical_range(ca_str):
-                        try:
-                            float(ca_str)
-                        except ValueError:
+                    for seg in ca_str.split("|"):
+                        seg = seg.strip()
+                        if not seg:
                             result.add(row_num, "correct_answer",
-                                       'NUMERICAL_DECIMAL: use a decimal "3.14" or range "9.95:10.05"')
+                                       'NUMERICAL_DECIMAL: empty segment in OR expression')
+                            break
+                        if not _is_numerical_range(seg):
+                            try:
+                                float(seg)
+                            except ValueError:
+                                result.add(row_num, "correct_answer",
+                                           'NUMERICAL_DECIMAL: use decimal "3.14", range "9.95:10.05", or OR "1.5|2.5"')
+                                break
 
                 elif qtype == "NUMERICAL_RANGE":
-                    if not _is_numerical_range(ca_str):
-                        result.add(row_num, "correct_answer",
-                                   'NUMERICAL_RANGE: use range format "min:max", e.g. "8.5:9.5"')
+                    for seg in ca_str.split("|"):
+                        seg = seg.strip()
+                        if not seg or not _is_numerical_range(seg):
+                            result.add(row_num, "correct_answer",
+                                       'NUMERICAL_RANGE: use range "min:max" or OR "8.5:9.5|11.0:12.0"')
+                            break
 
             if qtype == "PARTIAL_MCQ":
                 pm_raw = row.get("partial_marks")

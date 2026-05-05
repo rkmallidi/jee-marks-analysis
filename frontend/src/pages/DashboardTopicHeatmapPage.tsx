@@ -4,12 +4,13 @@
  */
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { dashboardApi, TopicHeatEntry } from "@/lib/api";
+import { dashboardApi, TopicHeatEntry, DimensionParams } from "@/lib/api";
 import { fmtPct, pctToHeatColor, pctToTextColor, subjectColor } from "@/lib/utils";
 import { PageLoader } from "@/components/ui/LoadingSpinner";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import ExamPicker from "@/components/ui/ExamPicker";
 import EmptyState from "@/components/ui/EmptyState";
+import DimensionFilter from "@/components/ui/DimensionFilter";
 import { useExamSelector } from "@/hooks/useExamSelector";
 
 const SUBJECTS = ["Physics", "Chemistry", "Maths"];
@@ -17,10 +18,11 @@ const SUBJECTS = ["Physics", "Chemistry", "Maths"];
 export default function DashboardTopicHeatmapPage() {
   const { examId, resolvedExamId, setExamId } = useExamSelector();
   const [subject, setSubject] = useState<string>("all");
+  const [dims, setDims]       = useState<DimensionParams>({});
 
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["topic-heatmap", resolvedExamId],
-    queryFn: () => dashboardApi.topicHeatmap(resolvedExamId!).then((r) => r.data),
+    queryKey: ["topic-heatmap", resolvedExamId, dims],
+    queryFn: () => dashboardApi.topicHeatmap(resolvedExamId!, dims).then((r) => r.data),
     enabled: resolvedExamId !== null,
   });
 
@@ -50,6 +52,8 @@ export default function DashboardTopicHeatmapPage() {
         </div>
         <ExamPicker examId={examId} onChange={setExamId} />
       </div>
+
+      <DimensionFilter value={dims} onChange={setDims} />
 
       {/* Summary strip */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">

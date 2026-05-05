@@ -2,12 +2,14 @@
  * D5a – Leaderboard
  * Full ranking table with medal icons, score bars, accuracy
  */
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { dashboardApi } from "@/lib/api";
+import { dashboardApi, DimensionParams } from "@/lib/api";
 import { fmtNum, fmtPct, SUBJECT_COLORS } from "@/lib/utils";
 import { PageLoader } from "@/components/ui/LoadingSpinner";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import ExamPicker from "@/components/ui/ExamPicker";
+import DimensionFilter from "@/components/ui/DimensionFilter";
 import { useExamSelector } from "@/hooks/useExamSelector";
 import { Link } from "react-router-dom";
 
@@ -16,10 +18,11 @@ const MEDAL = (r: number) =>
 
 export default function LeaderboardPage() {
   const { examId, resolvedExamId, setExamId } = useExamSelector();
+  const [dims, setDims] = useState<DimensionParams>({});
 
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["leaderboard", resolvedExamId],
-    queryFn: () => dashboardApi.leaderboard(resolvedExamId!, 50).then((r) => r.data),
+    queryKey: ["leaderboard", resolvedExamId, dims],
+    queryFn: () => dashboardApi.leaderboard(resolvedExamId!, 50, dims).then((r) => r.data),
     enabled: resolvedExamId !== null,
   });
 
@@ -37,6 +40,8 @@ export default function LeaderboardPage() {
         </div>
         <ExamPicker examId={examId} onChange={setExamId} />
       </div>
+
+      <DimensionFilter value={dims} onChange={setDims} />
 
       {/* Top 3 podium cards */}
       {data.length >= 3 && (

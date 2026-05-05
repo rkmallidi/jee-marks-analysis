@@ -31,10 +31,11 @@ class GradedRow:
 
 @dataclass(frozen=True)
 class StudentMeta:
-    admission_no: str
-    branch_name:  str
-    program_name: str
-    section:      str
+    admission_no:  str
+    branch_name:   str
+    program_name:  str
+    student_class: str
+    section:       str
 
 
 # ── Output contracts ───────────────────────────────────────────────────────────
@@ -52,11 +53,19 @@ class StudentExamRow:
     wrong_count:     int
     blank_count:     int
     negative_marks:  float
-    rank_overall:    int | None = None
-    rank_branch:     int | None = None
-    rank_program:    int | None = None
-    rank_section:    int | None = None
+    rank_overall:       int | None = None
+    rank_branch:        int | None = None
+    rank_program:       int | None = None
+    rank_section:       int | None = None
     percentile_overall: float | None = None
+    # AIR: ranked within same program_name + student_class
+    rank_air:           int | None = None
+    # Snapshots of student attributes at exam time
+    snap_program_name: str | None = None
+    snap_class_name:   str | None = None
+    snap_branch_name:  str | None = None
+    snap_section:      str | None = None
+    is_absent:         bool = False
 
 
 @dataclass
@@ -74,19 +83,23 @@ class StudentSubjectRow:
     blank:          int = 0
     negative_marks: float = 0.0
     rank_subject:   int | None = None
+    snap_branch_name: str | None = None
+    snap_section:     str | None = None
 
 
 @dataclass
 class StudentTopicRow:
     admission_no: str
     exam_id:      int
-    subject:    str
-    topic:      str
-    marks:      float
-    max_marks:  float
-    attempted:  int
-    correct:    int
-    accuracy:   float
+    subject:      str
+    topic:        str
+    marks:        float
+    max_marks:    float
+    attempted:    int
+    correct:      int
+    accuracy:     float
+    snap_branch_name: str | None = None
+    snap_section:     str | None = None
 
 
 @dataclass
@@ -169,11 +182,12 @@ def _dense_rank_rows(rows: list[StudentExamRow]) -> list[tuple[StudentExamRow, i
 # ── Core computation ───────────────────────────────────────────────────────────
 
 def compute_analytics(
-    exam_id:           int,
-    graded_rows:       list[GradedRow],
-    student_meta:      dict[str, StudentMeta],
-    paper_max_marks:   float = 0.0,
-    subject_max_marks: dict[str, float] | None = None,
+    exam_id:              int,
+    graded_rows:          list[GradedRow],
+    student_meta:         dict[str, StudentMeta],
+    paper_max_marks:      float = 0.0,
+    subject_max_marks:    dict[str, float] | None = None,
+    enrolled_student_ids: set[str] | None = None,
 ) -> AnalyticsBundle:
     """
     Pure Python aggregation. No I/O.
@@ -255,12 +269,13 @@ def compute_analytics(
                 topic_corr[tk] = topic_corr.get(tk, 0) + 1
         topic_subject[(r.subject, r.topic)] = r.subject
 
-    # ── Build exam summary rows ────────────────────────────────────────────────
+    # ── Build exam summary rows (present students only) ────────────────────────
     exam_rows: list[StudentExamRow] = []
     for sid in student_meta:
         t  = totals.get(sid, 0.0)
         # Use the authoritative paper total if supplied; fall back to accumulated per-student max
         mx = paper_max_marks if paper_max_marks > 0 else max_m.get(sid, 0.0)
+        meta = student_meta[sid]
         exam_rows.append(StudentExamRow(
             admission_no=sid, exam_id=exam_id,
             total_marks=t,  max_marks=mx,
@@ -271,25 +286,56 @@ def compute_analytics(
             wrong_count=wrong.get(sid, 0),
             blank_count=blank.get(sid, 0),
             negative_marks=neg_m.get(sid, 0.0),
+            snap_program_name=meta.program_name,
+            snap_class_name=meta.student_class,
+            snap_branch_name=meta.branch_name,
+            snap_section=meta.section,
         ))
 
-    # ── Ranking (Python-side; repository will also push via PG window funcs) ──
-    ranked_overall = _dense_rank_rows(exam_rows)
+    # ── Absent students: enrolled but no graded responses ─────────────────────
+    if enrolled_student_ids:
+        responded_sids = set(student_meta.keys())
+        mx = paper_max_marks if paper_max_marks > 0 else 0.0
+        for sid in enrolled_student_ids - responded_sids:
+            # We may not have meta for students who never appeared in graded rows
+            # but were passed via enrolled_student_ids with pre-populated student_meta
+            abs_meta = student_meta.get(sid)
+            if abs_meta:
+                exam_rows.append(StudentExamRow(
+                    admission_no=sid, exam_id=exam_id,
+                    total_marks=0.0, max_marks=mx,
+                    percentage=0.0,
+                    attempted_count=0, correct_count=0, partial_count=0,
+                    wrong_count=0, blank_count=0, negative_marks=0.0,
+                    is_absent=True,
+                    snap_program_name=abs_meta.program_name,
+                    snap_class_name=abs_meta.student_class,
+                    snap_branch_name=abs_meta.branch_name,
+                    snap_section=abs_meta.section,
+                ))
+
+    # ── Ranking: only present (non-absent) students participate ───────────────
+    present_rows = [r for r in exam_rows if not r.is_absent]
+
+    ranked_overall = _dense_rank_rows(present_rows)
     rank_map: dict[str, int] = {r.admission_no: rk for r, rk in ranked_overall}
 
     branch_groups:  dict[str, list[StudentExamRow]] = {}
     program_groups: dict[str, list[StudentExamRow]] = {}
     section_groups: dict[str, list[StudentExamRow]] = {}
+    air_groups:     dict[tuple[str, str], list[StudentExamRow]] = {}
 
-    for row in exam_rows:
+    for row in present_rows:
         meta = student_meta[row.admission_no]
         branch_groups.setdefault(meta.branch_name, []).append(row)
         program_groups.setdefault(meta.program_name, []).append(row)
         section_groups.setdefault(meta.section, []).append(row)
+        air_groups.setdefault((meta.program_name, meta.student_class), []).append(row)
 
     rank_branch:   dict[str, int] = {}
     rank_program:  dict[str, int] = {}
     rank_section:  dict[str, int] = {}
+    rank_air:      dict[str, int] = {}
 
     for group in branch_groups.values():
         for r, rk in _dense_rank_rows(group):
@@ -300,17 +346,22 @@ def compute_analytics(
     for group in section_groups.values():
         for r, rk in _dense_rank_rows(group):
             rank_section[r.admission_no] = rk
+    for group in air_groups.values():
+        for r, rk in _dense_rank_rows(group):
+            rank_air[r.admission_no] = rk
 
-    all_scores = sorted(r.total_marks for r in exam_rows)
+    all_scores = sorted(r.total_marks for r in present_rows)
     n = len(all_scores)
     for row in exam_rows:
-        row.rank_overall = rank_map.get(row.admission_no)
-        row.rank_branch  = rank_branch.get(row.admission_no)
-        row.rank_program = rank_program.get(row.admission_no)
-        row.rank_section = rank_section.get(row.admission_no)
-        if n:
-            below = sum(1 for s in all_scores if s < row.total_marks)
-            row.percentile_overall = round(below / n * 100, 2)
+        if not row.is_absent:
+            row.rank_overall = rank_map.get(row.admission_no)
+            row.rank_branch  = rank_branch.get(row.admission_no)
+            row.rank_program = rank_program.get(row.admission_no)
+            row.rank_section = rank_section.get(row.admission_no)
+            row.rank_air     = rank_air.get(row.admission_no)
+            if n:
+                below = sum(1 for s in all_scores if s < row.total_marks)
+                row.percentile_overall = round(below / n * 100, 2)
 
     # ── Subject summaries ──────────────────────────────────────────────────────
     subject_rows: list[StudentSubjectRow] = []
@@ -329,6 +380,13 @@ def compute_analytics(
             blank=subj_blank.get((sid, subj), 0),
             negative_marks=subj_neg.get((sid, subj), 0.0),
         ))
+
+    # Populate subject-row snapshots from student_meta
+    for sr in subject_rows:
+        m = student_meta.get(sr.admission_no)
+        if m:
+            sr.snap_branch_name = m.branch_name
+            sr.snap_section     = m.section
 
     subj_groups: dict[str, list[StudentSubjectRow]] = {}
     for sr in subject_rows:
@@ -349,11 +407,14 @@ def compute_analytics(
     for (sid, subj, topic), marks in topic_marks.items():
         att  = topic_att.get((sid, subj, topic), 0)
         corr = topic_corr.get((sid, subj, topic), 0)
+        m    = student_meta.get(sid)
         topic_rows.append(StudentTopicRow(
             admission_no=sid, exam_id=exam_id, subject=subj, topic=topic,
             marks=marks, max_marks=topic_max.get((sid, subj, topic), 0.0),
             attempted=att, correct=corr,
             accuracy=corr / att if att else 0.0,
+            snap_branch_name=m.branch_name if m else None,
+            snap_section=m.section if m else None,
         ))
 
     # ── Rank summaries (cutoff percentiles) ────────────────────────────────────
@@ -369,7 +430,7 @@ def compute_analytics(
             cutoff_median=statistics.median(scores) if scores else None,
         )
 
-    rank_summaries.append(_mk_rank("overall", "all", [r.total_marks for r in exam_rows]))
+    rank_summaries.append(_mk_rank("overall", "all", [r.total_marks for r in present_rows]))
     for bname, grp in branch_groups.items():
         rank_summaries.append(_mk_rank("branch", bname, [r.total_marks for r in grp]))
     for prog, grp in program_groups.items():

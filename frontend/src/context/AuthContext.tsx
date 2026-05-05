@@ -1,14 +1,13 @@
 import React, {
   createContext,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useState,
 } from "react";
 import { authApi, clearTokens, UserMe } from "@/lib/api";
 
-interface AuthState {
+export interface AuthState {
   user: UserMe | null;
   isLoading: boolean;
   isAuthenticated: boolean;
@@ -16,7 +15,7 @@ interface AuthState {
   logout: () => void;
 }
 
-const AuthContext = createContext<AuthState | null>(null);
+export const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser]         = useState<UserMe | null>(null);
@@ -62,9 +61,3 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-// eslint-disable-next-line react-refresh/only-export-components
-export function useAuth(): AuthState {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error("useAuth must be inside AuthProvider");
-  return ctx;
-}

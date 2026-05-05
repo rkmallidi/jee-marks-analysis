@@ -288,12 +288,13 @@ interface UploadSlotProps {
   label:    string;
   icon:     string;
   columns:  ColumnSpec;
+  accept?:  string;
   onUpload: (file: File, onProgress: (p: number) => void) => Promise<UploadJobOut>;
   onDone?:  () => void;
   inline?:  boolean;
 }
 
-function UploadSlot({ label, icon, columns, onUpload, onDone, inline }: UploadSlotProps) {
+function UploadSlot({ label, icon, columns, accept = ".xlsx,.xls,.csv", onUpload, onDone, inline }: UploadSlotProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [state, setState] = useState<SlotPhase>({ type: "idle" });
 
@@ -323,7 +324,7 @@ function UploadSlot({ label, icon, columns, onUpload, onDone, inline }: UploadSl
         <input
           type="file"
           ref={inputRef}
-          accept=".xlsx,.xls,.csv"
+          accept={accept}
           className="hidden"
           onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
         />
@@ -378,7 +379,7 @@ function UploadSlot({ label, icon, columns, onUpload, onDone, inline }: UploadSl
       <input
         type="file"
         ref={inputRef}
-        accept=".xlsx,.xls,.csv"
+        accept={accept}
         className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); }}
       />
@@ -405,7 +406,7 @@ function UploadSlot({ label, icon, columns, onUpload, onDone, inline }: UploadSl
               </div>
             </div>
           </div>
-          <p className="text-xs text-surface-400">.xlsx · overwrites existing</p>
+          <p className="text-xs text-surface-400">{accept.split(",")[0].toUpperCase()} · overwrites existing</p>
         </div>
         {state.type === "idle" && (
           <button
@@ -469,6 +470,10 @@ const COL_KEY: ColumnSpec = {
 const COL_RESPONSES: ColumnSpec = {
   required: ["admission_no", "1", "2", "… (one column per Q#)"],
   optional: [],
+};
+const COL_OMR_SCANNER: ColumnSpec = {
+  required: ["x, admission_no, v1, v2, … (positional)"],
+  optional: ["-1000000 = blank"],
 };
 
 // ── Combined action panel (upload + evaluate) ─────────────────────────────────
@@ -536,6 +541,16 @@ function ActionPanel({ examId, paperCode, hasQuestions, hasKey, hasResponses, on
             icon="📊"
             columns={COL_RESPONSES}
             onUpload={(f, p) => uploadsApi.uploadResponses(examId, paperCode, f, p).then((r) => r.data)}
+            onDone={() => { setLocalRespUploaded(true); onUploadDone(); }}
+          />
+        )}
+        {hasQuestions && (
+          <UploadSlot
+            label="OMR Scanner (.IIT)"
+            icon="🖨️"
+            columns={COL_OMR_SCANNER}
+            accept=".iit,.txt,.csv"
+            onUpload={(f, p) => uploadsApi.uploadOmrResponses(examId, paperCode, f, p).then((r) => r.data)}
             onDone={() => { setLocalRespUploaded(true); onUploadDone(); }}
           />
         )}
@@ -989,7 +1004,7 @@ export default function QuestionPaperPage() {
     (q) => q.correct_option_bkc !== null || q.correct_option_akc !== null
   ) ?? false;
   const hasResponses = uploadJobs?.some(
-    (j) => j.job_type === "responses" && j.status === "completed"
+    (j) => (j.job_type === "responses" || j.job_type === "omr_responses" || j.job_type === "responses_omr") && j.status === "completed"
   ) ?? false;
 
   // next sequence number for Add modal
@@ -1115,6 +1130,9 @@ export default function QuestionPaperPage() {
             {exams?.map((e) => (
               <option key={e.id} value={e.id}>
                 {e.exam_code}{e.title ? ` — ${e.title}` : ""}
+                {e.program_name ? ` [${e.program_name}` : ""}
+                {e.program_name && e.student_class ? ` · ${e.student_class}` : ""}
+                {e.program_name ? `]` : ""}
               </option>
             ))}
           </select>
@@ -1139,6 +1157,22 @@ export default function QuestionPaperPage() {
               <span className="w-px h-4 bg-primary-400 hidden sm:block" />
               <span className="text-xs text-primary-200">
                 📅 {new Date(selectedExam.exam_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+              </span>
+            </>
+          )}
+          {selectedExam.program_name && (
+            <>
+              <span className="w-px h-4 bg-primary-400 hidden sm:block" />
+              <span className="text-xs text-primary-200">
+                🎓 {selectedExam.program_name}
+              </span>
+            </>
+          )}
+          {selectedExam.student_class && (
+            <>
+              <span className="w-px h-4 bg-primary-400 hidden sm:block" />
+              <span className="text-xs text-primary-200">
+                🏫 {selectedExam.student_class}
               </span>
             </>
           )}

@@ -98,8 +98,9 @@ export const studentsApi = {
 
 // Exams
 export const examsApi = {
-  list:      ()                    => api.get<ExamOut[]>("/exams"),
-  create:    (b: ExamCreate)       => api.post<ExamOut>("/exams", b),
+  list:      ()                        => api.get<ExamOut[]>("/exams"),
+  create:    (b: ExamCreate)           => api.post<ExamOut>("/exams", b),
+  update:    (id: number, b: ExamUpdate) => api.patch<ExamOut>(`/exams/${id}`, b),
   getPapers: (examId: number)      => api.get<string[]>(`/exams/${examId}/papers`),
 };
 
@@ -136,6 +137,16 @@ export const uploadsApi = {
       onUploadProgress: (e) => onProgress?.(Math.round((e.loaded * 100) / (e.total ?? 1))),
     });
   },
+  uploadOmrResponses: (examId: number, paperCode: string, file: File, onProgress?: (pct: number) => void) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("exam_id", String(examId));
+    fd.append("paper_code", paperCode);
+    return api.post<UploadJobOut>("/uploads/omr-responses", fd, {
+      headers: { "Content-Type": "multipart/form-data" },
+      onUploadProgress: (e) => onProgress?.(Math.round((e.loaded * 100) / (e.total ?? 1))),
+    });
+  },
   listJobs: (examId?: number) => api.get<UploadJobOut[]>("/uploads/jobs", { params: { exam_id: examId } }),
   getJob:   (id: number)      => api.get<UploadJobOut>(`/uploads/jobs/${id}`),
 };
@@ -162,18 +173,32 @@ export const evalApi = {
     ),
 };
 
+export interface DimensionParams {
+  branch_name?:   string;
+  program_name?:  string;
+  student_class?: string;
+  section_dim?:   string;
+}
+
 // Dashboards
 export const dashboardApi = {
-  overall:        (examId: number) => api.get<DashboardOverall>(`/dashboards/overall/${examId}`),
-  weakStudents:   (examId: number) => api.get<WeakStudentsDashboard>(`/dashboards/weak-students/${examId}`),
-  subjectAnalysis:(examId: number) => api.get<SubjectDashboard>(`/dashboards/subject-analysis/${examId}`),
-  topicHeatmap:   (examId: number) => api.get<TopicHeatmapDashboard>(`/dashboards/topic-heatmap/${examId}`),
+  overall:        (examId: number, dims?: DimensionParams) =>
+    api.get<DashboardOverall>(`/dashboards/overall/${examId}`, { params: dims }),
+  weakStudents:   (examId: number, dims?: DimensionParams) =>
+    api.get<WeakStudentsDashboard>(`/dashboards/weak-students/${examId}`, { params: dims }),
+  subjectAnalysis:(examId: number, dims?: DimensionParams) =>
+    api.get<SubjectDashboard>(`/dashboards/subject-analysis/${examId}`, { params: dims }),
+  topicHeatmap:   (examId: number, dims?: DimensionParams) =>
+    api.get<TopicHeatmapDashboard>(`/dashboards/topic-heatmap/${examId}`, { params: dims }),
   studentDeepDive:(admissionNo: string) => api.get<StudentDeepDive>(`/dashboards/student/${admissionNo}`),
   studentExamResponses: (admissionNo: string, examId: number) =>
     api.get<QuestionResponse[]>(`/dashboards/student/${admissionNo}/exam/${examId}/responses`),
-  examTrend:      (examId: number) => api.get<ExamTrendPoint[]>(`/dashboards/exam-trend/${examId}`),
-  leaderboard:    (examId: number, limit?: number) =>
-    api.get<LeaderboardEntry[]>(`/dashboards/leaderboard/${examId}`, { params: { limit } }),
+  examTrend:      (examId: number, dims?: DimensionParams) =>
+    api.get<ExamTrendPoint[]>(`/dashboards/exam-trend/${examId}`, { params: dims }),
+  leaderboard:    (examId: number, limit?: number, dims?: DimensionParams) =>
+    api.get<LeaderboardEntry[]>(`/dashboards/leaderboard/${examId}`, { params: { limit, ...dims } }),
+  scoreDistribution: (examId: number, dims?: DimensionParams) =>
+    api.get<ScoreDistributionPoint[]>(`/dashboards/score-distribution`, { params: { exam_id: examId, ...dims } }),
   exams:          () => api.get<ExamOut[]>("/dashboards/exams"),
 };
 
@@ -358,12 +383,19 @@ export interface TopicHeatEntry {
 
 export interface StudentDeepDive {
   student: StudentOut;
+  rolling_averages: Array<{
+    exam_type:  string;
+    avg_score:  number;
+    exam_count: number;
+    updated_at: string;
+  }>;
   exam_history:   Array<{
     exam_id:        number;
     exam_code:      string | null;
     exam_type:      string | null;
     exam_date:      string | null;
     papers:         string[];
+    is_absent?:     boolean;
     total_marks:    number;
     max_marks:      number;
     percentage:     number;
@@ -446,20 +478,32 @@ export interface ExamTrendPoint {
 }
 
 export interface ExamOut {
-  id:         number;
-  exam_code:  string;
-  title?:     string;
-  exam_date?: string;
-  exam_type?: string;
-  papers:     string[];  // ["P1"] for Mains, ["P1","P2"] for Advanced
-  created_at: string;
+  id:            number;
+  exam_code:     string;
+  title?:        string;
+  exam_date?:    string;
+  exam_type?:    string;
+  program_name?: string;
+  student_class?: string;
+  papers:        string[];  // ["P1"] for Mains, ["P1","P2"] for Advanced
+  created_at:    string;
 }
 
 export interface ExamCreate {
-  exam_code: string;
-  title:     string;
-  exam_date: string;            // ISO date "YYYY-MM-DD"
-  exam_type: "Mains" | "Advanced";
+  exam_code:     string;
+  title:         string;
+  exam_date:     string;            // ISO date "YYYY-MM-DD"
+  exam_type:     "Mains" | "Advanced";
+  program_name?: string;
+  student_class?: string;
+}
+
+export interface ExamUpdate {
+  title?:         string;
+  exam_date?:     string;
+  exam_type?:     "Mains" | "Advanced";
+  program_name?:  string;
+  student_class?: string;
 }
 
 export interface QuestionOut {
@@ -519,6 +563,9 @@ export interface LeaderboardEntry {
   admission_no:   string;
   name:           string;
   branch_name:    string;
+  program_name:   string;
+  student_class:  string;
+  section:        string;
   total_marks:    number;
   physics_marks:  number;
   chemistry_marks: number;
@@ -526,6 +573,13 @@ export interface LeaderboardEntry {
   accuracy_pct:   number;
   negative_marks: number;
   percentile:     number;
+}
+
+export interface ScoreDistributionPoint {
+  bucket:        number;
+  bucket_min:    number;
+  bucket_max:    number;
+  student_count: number;
 }
 
 export interface AlertOut {

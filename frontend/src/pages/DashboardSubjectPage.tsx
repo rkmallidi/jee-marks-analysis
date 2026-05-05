@@ -2,25 +2,28 @@
  * D3 – Subject Analysis Dashboard
  * Per-subject bar chart + accuracy + top/bottom performers
  */
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, RadarChart, Radar, PolarGrid,
   PolarAngleAxis, PolarRadiusAxis,
 } from "recharts";
-import { dashboardApi } from "@/lib/api";
+import { dashboardApi, DimensionParams } from "@/lib/api";
 import { fmtNum, fmtPct, subjectColor } from "@/lib/utils";
 import { PageLoader } from "@/components/ui/LoadingSpinner";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import ExamPicker from "@/components/ui/ExamPicker";
+import DimensionFilter from "@/components/ui/DimensionFilter";
 import { useExamSelector } from "@/hooks/useExamSelector";
 
 export default function DashboardSubjectPage() {
   const { examId, resolvedExamId, setExamId } = useExamSelector();
+  const [dims, setDims] = useState<DimensionParams>({});
 
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["subject-analysis", resolvedExamId],
-    queryFn: () => dashboardApi.subjectAnalysis(resolvedExamId!).then((r) => r.data),
+    queryKey: ["subject-analysis", resolvedExamId, dims],
+    queryFn: () => dashboardApi.subjectAnalysis(resolvedExamId!, dims).then((r) => r.data),
     enabled: resolvedExamId !== null,
   });
 
@@ -43,6 +46,8 @@ export default function DashboardSubjectPage() {
         </div>
         <ExamPicker examId={examId} onChange={setExamId} />
       </div>
+
+      <DimensionFilter value={dims} onChange={setDims} />
 
       {/* KPI cards */}
       <div className="grid sm:grid-cols-3 gap-4">

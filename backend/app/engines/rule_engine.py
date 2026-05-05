@@ -31,8 +31,10 @@ class Evaluator(Protocol):
 
 # ── Normalisation helpers ──────────────────────────────────────────────────────
 
-def _normalise(response_raw: str) -> str:
-    """Strip whitespace; treat 'blank'/'none'/'null'/'' as empty."""
+def _normalise(response_raw: str | None) -> str:
+    """Strip whitespace; treat None/'blank'/'none'/'null'/'' as empty."""
+    if response_raw is None:
+        return ""
     cleaned = response_raw.strip().lower()
     if cleaned in ("", "blank", "none", "null"):
         return ""
@@ -66,54 +68,87 @@ def _correct_options(question: QuestionRow) -> frozenset[str]:
     return frozenset(c for c in raw if c.strip())
 
 
-def _parse_numerical(correct_option: str | None) -> tuple[float | None, float | None, float | None]:
+def _correct_options_or(raw: str | None) -> list[frozenset[str]]:
+    """
+    Parse correct_option with | OR support for SCQ.
+
+    "B"    → [{"B"}]          single correct answer (backward compatible)
+    "A|C"  → [{"A"}, {"C"}]   either A or C is accepted
+    """
+    if not raw or not raw.strip():
+        return []
+    result = []
+    for seg in raw.strip().upper().split("|"):
+        seg = seg.strip()
+        if not seg:
+            continue
+        if "," in seg:
+            result.append(frozenset(x.strip() for x in seg.split(",") if x.strip()))
+        else:
+            result.append(frozenset(c for c in seg if c.strip()))
+    return result
+
+
+def _parse_numerical(
+    correct_option: str | None,
+) -> list[tuple[float | None, float | None, float | None]]:
     """
     Parse numerical answer stored as a string in correct_option.
 
-    Formats accepted:
+    Supports | to express OR conditions (multiple accepted values/ranges).
+
+    Formats accepted per segment:
       "42"          → exact answer 42.0
       "3.14"        → exact answer 3.14
       "8.5:9.5"     → range [8.5, 9.5]
       "-3.0:-2.0"   → range [-3.0, -2.0]
+      "8|10"        → exact 8 OR exact 10
+      "3:7|12"      → range [3,7] OR exact 12
 
-    Returns (exact, range_min, range_max).  All three are None when input is blank.
+    Returns a list of (exact, range_min, range_max) tuples.
+    Returns an empty list when input is blank or unparseable.
     """
     if not correct_option or not correct_option.strip():
-        return None, None, None
+        return []
 
-    s = correct_option.strip()
-    # Range: contains ':' not as part of a negative sign
-    # Split on first ':' that isn't the very start of the string
-    colon_pos = s.find(":", 1)   # skip index 0 so "-5" isn't split
-    if colon_pos != -1:
-        try:
-            lo = float(s[:colon_pos])
-            hi = float(s[colon_pos + 1:])
-            return None, lo, hi
-        except ValueError:
-            return None, None, None
-
-    try:
-        return float(s), None, None
-    except ValueError:
-        return None, None, None
+    results: list[tuple[float | None, float | None, float | None]] = []
+    for seg in correct_option.strip().split("|"):
+        s = seg.strip()
+        if not s:
+            continue
+        # Range: contains ':' not at the very start (so "-5" isn't split)
+        colon_pos = s.find(":", 1)
+        if colon_pos != -1:
+            try:
+                lo = float(s[:colon_pos])
+                hi = float(s[colon_pos + 1:])
+                results.append((None, lo, hi))
+            except ValueError:
+                pass
+        else:
+            try:
+                results.append((float(s), None, None))
+            except ValueError:
+                pass
+    return results
 
 
 # ── Evaluators ─────────────────────────────────────────────────────────────────
 
 class SCQEvaluator:
-    """Single-correct: +positive on match, −negative on wrong, 0 on blank."""
+    """Single-correct: +positive on match, −negative on wrong, 0 on blank.
+    correct_option supports | for OR: "A|C" accepts A or C as correct.
+    """
 
-    def grade(self, response_raw: str, question: QuestionRow) -> GradeResult:
+    def grade(self, response_raw: str | None, question: QuestionRow) -> GradeResult:
         norm = _normalise(response_raw)
         if not norm:
             return GradeResult(0.0, "blank", False)
 
         selected = _parse_options(norm)
-        correct  = _correct_options(question)
-
-        if selected == correct:
-            return GradeResult(question.positive_marks, "correct", True)
+        for valid in _correct_options_or(question.correct_option):
+            if selected == valid:
+                return GradeResult(question.positive_marks, "correct", True)
         return GradeResult(-question.negative_marks, "wrong", True)
 
 
@@ -164,13 +199,12 @@ class NumericalIntEvaluator:
         except ValueError:
             return GradeResult(0.0, "wrong", True)
 
-        exact, rmin, rmax = _parse_numerical(question.correct_option)
         pos = question.positive_marks
-
-        if exact is not None and given == int(round(exact)):
-            return GradeResult(pos, "correct", True)
-        if rmin is not None and rmax is not None and int(round(rmin)) <= given <= int(round(rmax)):
-            return GradeResult(pos, "correct", True)
+        for exact, rmin, rmax in _parse_numerical(question.correct_option):
+            if exact is not None and given == int(round(exact)):
+                return GradeResult(pos, "correct", True)
+            if rmin is not None and rmax is not None and int(round(rmin)) <= given <= int(round(rmax)):
+                return GradeResult(pos, "correct", True)
 
         return GradeResult(0.0, "wrong", True)
 
@@ -192,13 +226,12 @@ class NumericalDecimalEvaluator:
         except ValueError:
             return GradeResult(0.0, "wrong", True)
 
-        exact, rmin, rmax = _parse_numerical(question.correct_option)
         pos = question.positive_marks
-
-        if exact is not None and given == round(exact, 2):
-            return GradeResult(pos, "correct", True)
-        if rmin is not None and rmax is not None and rmin <= given <= rmax:
-            return GradeResult(pos, "correct", True)
+        for exact, rmin, rmax in _parse_numerical(question.correct_option):
+            if exact is not None and given == round(exact, 2):
+                return GradeResult(pos, "correct", True)
+            if rmin is not None and rmax is not None and rmin <= given <= rmax:
+                return GradeResult(pos, "correct", True)
 
         return GradeResult(0.0, "wrong", True)
 
@@ -218,11 +251,10 @@ class NumericalRangeEvaluator:
         except ValueError:
             return GradeResult(0.0, "wrong", True)
 
-        _, rmin, rmax = _parse_numerical(question.correct_option)
         pos = question.positive_marks
-
-        if rmin is not None and rmax is not None and rmin <= given <= rmax:
-            return GradeResult(pos, "correct", True)
+        for _, rmin, rmax in _parse_numerical(question.correct_option):
+            if rmin is not None and rmax is not None and rmin <= given <= rmax:
+                return GradeResult(pos, "correct", True)
 
         return GradeResult(0.0, "wrong", True)
 

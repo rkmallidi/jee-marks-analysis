@@ -2,49 +2,49 @@
  * D1 – Overall Performance Dashboard
  * Cards → Trend line chart → Branch comparison bar → Histogram → Top-10 table
  */
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, Cell,
 } from "recharts";
-import { dashboardApi, ExamTrendPoint } from "@/lib/api";
+import { dashboardApi, ExamTrendPoint, DimensionParams } from "@/lib/api";
 import { fmtNum, fmtPct, fmt, SUBJECT_COLORS } from "@/lib/utils";
 import StatCard from "@/components/ui/StatCard";
 import { PageLoader } from "@/components/ui/LoadingSpinner";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import EmptyState from "@/components/ui/EmptyState";
 import ExamPicker from "@/components/ui/ExamPicker";
+import DimensionFilter from "@/components/ui/DimensionFilter";
 import { useExamSelector } from "@/hooks/useExamSelector";
 
 export default function DashboardOverallPage() {
   const { examId, setExamId } = useExamSelector();
+  const [dims, setDims] = useState<DimensionParams>({});
 
   const { data: exams, isLoading: examsLoading } = useQuery({
     queryKey: ["exams-list"],
     queryFn: () => dashboardApi.exams().then((r) => r.data),
   });
 
-  // Resolve the actual exam id — fall back to the first available if the stored one is stale
   const resolvedExamId: number | null = (() => {
     if (!exams || exams.length === 0) return null;
     return exams.find((e) => e.id === examId) ? examId : exams[0].id;
   })();
 
-  // Persist fallback so other pages pick it up too
   useEffect(() => {
     if (resolvedExamId !== null && resolvedExamId !== examId) setExamId(resolvedExamId);
   }, [resolvedExamId]);
 
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["dashboard-overall", resolvedExamId],
-    queryFn: () => dashboardApi.overall(resolvedExamId!).then((r) => r.data),
+    queryKey: ["dashboard-overall", resolvedExamId, dims],
+    queryFn: () => dashboardApi.overall(resolvedExamId!, dims).then((r) => r.data),
     enabled: resolvedExamId !== null,
   });
 
   const { data: trend } = useQuery<ExamTrendPoint[]>({
-    queryKey: ["exam-trend", resolvedExamId],
-    queryFn: () => dashboardApi.examTrend(resolvedExamId!).then((r) => r.data),
+    queryKey: ["exam-trend", resolvedExamId, dims],
+    queryFn: () => dashboardApi.examTrend(resolvedExamId!, dims).then((r) => r.data),
     enabled: resolvedExamId !== null,
   });
 
@@ -84,6 +84,8 @@ export default function DashboardOverallPage() {
         </div>
         <ExamPicker examId={examId} onChange={setExamId} />
       </div>
+
+      <DimensionFilter value={dims} onChange={setDims} />
 
       {/* KPI strip */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">

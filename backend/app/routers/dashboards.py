@@ -13,14 +13,28 @@ from app.services.student_service import StudentService
 
 router = APIRouter(prefix="/dashboards", tags=["dashboards"])
 
+# Shared dimension query-param names (re-used across endpoints)
+_DIMS = {
+    "branch_name":   Query(None),
+    "program_name":  Query(None),
+    "student_class": Query(None),
+    "section_dim":   Query(None, alias="section_dim"),
+}
+
 
 @router.get("/overall/{exam_id}")
 async def overall(
-    exam_id:      int,
-    _:            CurrentUser  = Depends(require_role(["admin", "dean", "faculty"])),
-    session:      AsyncSession = Depends(get_session),
+    exam_id:       int,
+    branch_name:   str | None = Query(None),
+    program_name:  str | None = Query(None),
+    student_class: str | None = Query(None),
+    section_dim:   str | None = Query(None),
+    _:             CurrentUser  = Depends(require_role(["admin", "dean", "faculty"])),
+    session:       AsyncSession = Depends(get_session),
 ):
-    result = await DashboardService(session).get_overall(exam_id)
+    result = await DashboardService(session).get_overall(
+        exam_id, branch_name, program_name, student_class, section_dim
+    )
     if result is None:
         raise HTTPException(status_code=404, detail="Exam not found")
     return result
@@ -28,20 +42,30 @@ async def overall(
 
 @router.get("/exam-trend/{exam_id}")
 async def exam_trend(
-    exam_id: int,
-    _:       CurrentUser  = Depends(require_role(["admin", "dean", "faculty"])),
-    session: AsyncSession = Depends(get_session),
+    exam_id:       int,
+    branch_name:   str | None = Query(None),
+    program_name:  str | None = Query(None),
+    student_class: str | None = Query(None),
+    section_dim:   str | None = Query(None),
+    _:             CurrentUser  = Depends(require_role(["admin", "dean", "faculty"])),
+    session:       AsyncSession = Depends(get_session),
 ):
-    return await DashboardService(session).get_exam_trend(exam_id)
+    return await DashboardService(session).get_exam_trend(
+        exam_id, branch_name, program_name, student_class, section_dim
+    )
 
 
 @router.get("/weak-students/{exam_id}")
 async def weak_students(
-    exam_id:  int,
-    severity: str | None  = Query(None),
-    rule_key: str | None  = Query(None),
-    current_user: CurrentUser = Depends(require_role(["admin", "dean", "faculty"])),
-    session: AsyncSession     = Depends(get_session),
+    exam_id:       int,
+    severity:      str | None = Query(None),
+    rule_key:      str | None = Query(None),
+    branch_name:   str | None = Query(None),
+    program_name:  str | None = Query(None),
+    student_class: str | None = Query(None),
+    section_dim:   str | None = Query(None),
+    current_user:  CurrentUser  = Depends(require_role(["admin", "dean", "faculty"])),
+    session:       AsyncSession = Depends(get_session),
 ):
     allowed_nos = None
     if current_user.role == "faculty":
@@ -49,26 +73,38 @@ async def weak_students(
         sections = await svc.get_allowed_sections_for_faculty(current_user.id)
         students, _ = await svc.list_students(None, None, None, "active", sections)
         allowed_nos = [s.admission_no for s in students]
-    return await DashboardService(session).get_weak_students(exam_id, severity, rule_key, allowed_nos)
+    return await DashboardService(session).get_weak_students(
+        exam_id, severity, rule_key, allowed_nos,
+        branch_name, program_name, student_class, section_dim,
+    )
 
 
 @router.get("/subject-analysis/{exam_id}")
 async def subject_analysis(
-    exam_id:     int,
-    scope:       str = Query("overall"),
-    scope_value: str = Query("all"),
-    _: CurrentUser = Depends(require_role(["admin", "dean", "faculty"])),
-    session: AsyncSession = Depends(get_session),
+    exam_id:       int,
+    scope:         str       = Query("overall"),
+    scope_value:   str       = Query("all"),
+    branch_name:   str | None = Query(None),
+    program_name:  str | None = Query(None),
+    student_class: str | None = Query(None),
+    section_dim:   str | None = Query(None),
+    _:             CurrentUser  = Depends(require_role(["admin", "dean", "faculty"])),
+    session:       AsyncSession = Depends(get_session),
 ):
-    return await DashboardService(session).get_subjects(exam_id, scope, scope_value)
+    return await DashboardService(session).get_subjects(
+        exam_id, scope, scope_value, branch_name, program_name, student_class, section_dim
+    )
 
 
 @router.get("/topic-heatmap/{exam_id}")
 async def topic_heatmap(
-    exam_id: int,
-    section: str | None   = Query(None),
-    current_user: CurrentUser = Depends(require_role(["admin", "dean", "faculty"])),
-    session: AsyncSession     = Depends(get_session),
+    exam_id:       int,
+    section:       str | None = Query(None),
+    branch_name:   str | None = Query(None),
+    program_name:  str | None = Query(None),
+    student_class: str | None = Query(None),
+    current_user:  CurrentUser  = Depends(require_role(["admin", "dean", "faculty"])),
+    session:       AsyncSession = Depends(get_session),
 ):
     svc         = StudentService(session)
     student_ids = None
@@ -83,7 +119,9 @@ async def topic_heatmap(
         students, _ = await svc.list_students(None, None, section, "active", None)
         student_ids = [s.admission_no for s in students]
 
-    return await DashboardService(session).get_topic_heatmap(exam_id, section, student_ids)
+    return await DashboardService(session).get_topic_heatmap(
+        exam_id, section, student_ids, branch_name, program_name, student_class
+    )
 
 
 @router.get("/student/{admission_no}/exam/{exam_id}/responses")
@@ -107,22 +145,36 @@ async def student_deep_dive(
 
 @router.get("/leaderboard/{exam_id}")
 async def leaderboard(
-    exam_id: int,
-    limit:   int = Query(10, ge=1, le=100),
-    offset:  int = Query(0, ge=0),
-    _: CurrentUser = Depends(require_role(["admin", "dean", "faculty"])),
-    session: AsyncSession = Depends(get_session),
+    exam_id:       int,
+    limit:         int       = Query(10, ge=1, le=100),
+    offset:        int       = Query(0, ge=0),
+    branch_name:   str | None = Query(None),
+    program_name:  str | None = Query(None),
+    student_class: str | None = Query(None),
+    section_dim:   str | None = Query(None),
+    _:             CurrentUser  = Depends(require_role(["admin", "dean", "faculty"])),
+    session:       AsyncSession = Depends(get_session),
 ):
-    return await AnalyticsRepository(session).get_leaderboard(exam_id, limit, offset)
+    allowed_nos = await DashboardService(session)._resolve_admission_nos(
+        branch_name, program_name, student_class, section_dim
+    )
+    return await AnalyticsRepository(session).get_leaderboard(exam_id, limit, offset, allowed_nos)
 
 
 @router.get("/score-distribution")
 async def score_distribution(
-    exam_id: int = Query(...),
-    _: CurrentUser = Depends(require_role(["admin", "dean", "faculty"])),
-    session: AsyncSession = Depends(get_session),
+    exam_id:       int       = Query(...),
+    branch_name:   str | None = Query(None),
+    program_name:  str | None = Query(None),
+    student_class: str | None = Query(None),
+    section_dim:   str | None = Query(None),
+    _:             CurrentUser  = Depends(require_role(["admin", "dean", "faculty"])),
+    session:       AsyncSession = Depends(get_session),
 ):
-    return await AnalyticsRepository(session).get_percentile_distribution(exam_id)
+    allowed_nos = await DashboardService(session)._resolve_admission_nos(
+        branch_name, program_name, student_class, section_dim
+    )
+    return await AnalyticsRepository(session).get_percentile_distribution(exam_id, allowed_nos)
 
 
 @router.get("/exams", response_model=list[ExamOut])

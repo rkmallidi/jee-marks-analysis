@@ -147,6 +147,9 @@ class Exam(Base):
     exam_date: Mapped[Optional[date]] = mapped_column(Date)
     # "Mains" → P1 only; "Advanced" → P1 + P2
     exam_type: Mapped[Optional[str]] = mapped_column(String(20))
+    # Scope: which students this exam targets — drives AIR ranking and absent detection
+    program_name:  Mapped[Optional[str]] = mapped_column(String(50))
+    student_class: Mapped[Optional[str]] = mapped_column(String(30))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     responses: Mapped[list[OmrResponse]] = relationship(back_populates="exam")
@@ -278,6 +281,14 @@ class StudentExamSummary(Base):
     rank_program: Mapped[Optional[int]] = mapped_column(Integer)
     rank_section: Mapped[Optional[int]] = mapped_column(Integer)
     percentile_overall: Mapped[Optional[float]] = mapped_column(Float)
+    # AIR = rank within same program_name + student_class (true All India Rank)
+    rank_air: Mapped[Optional[int]] = mapped_column(Integer)
+    # Snapshot of student attributes at exam time (preserved after transfers)
+    snap_program_name: Mapped[Optional[str]] = mapped_column(String(50))
+    snap_class_name:   Mapped[Optional[str]] = mapped_column(String(30))
+    snap_branch_name:  Mapped[Optional[str]] = mapped_column(String(100))
+    snap_section:      Mapped[Optional[str]] = mapped_column(String(10))
+    is_absent: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
 
     student: Mapped[Student] = relationship(back_populates="exam_summaries")
 
@@ -285,6 +296,7 @@ class StudentExamSummary(Base):
         UniqueConstraint("admission_no", "exam_id"),
         Index("idx_ses_exam_student", "exam_id", "admission_no"),
         Index("idx_ses_exam_rank", "exam_id", "rank_overall"),
+        Index("idx_ses_exam_air",  "exam_id", "rank_air"),
         Index("idx_ses_student", "admission_no"),
     )
 
@@ -306,6 +318,8 @@ class StudentSubjectSummary(Base):
     blank: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     negative_marks: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")
     rank_subject: Mapped[Optional[int]] = mapped_column(Integer)
+    snap_branch_name: Mapped[Optional[str]] = mapped_column(String(100))
+    snap_section:     Mapped[Optional[str]] = mapped_column(String(10))
 
     __table_args__ = (
         UniqueConstraint("admission_no", "exam_id", "subject"),
@@ -326,6 +340,8 @@ class StudentTopicSummary(Base):
     attempted: Mapped[int] = mapped_column(Integer, nullable=False)
     correct: Mapped[int] = mapped_column(Integer, nullable=False)
     accuracy: Mapped[float] = mapped_column(Float, nullable=False)
+    snap_branch_name: Mapped[Optional[str]] = mapped_column(String(100))
+    snap_section:     Mapped[Optional[str]] = mapped_column(String(10))
 
     __table_args__ = (
         UniqueConstraint("admission_no", "exam_id", "subject", "topic"),
@@ -475,4 +491,47 @@ class Result(Base):
         Index("idx_results_exam",         "exam_id"),
         Index("idx_results_student",      "student_id"),
         Index("idx_results_student_exam", "student_id", "exam_id"),
+    )
+
+
+# ── Rolling Averages ───────────────────────────────────────────────────────────
+
+class RollingAverage(Base):
+    """Cumulative average per student per exam type (Mains / Advanced), updated after each evaluation."""
+    __tablename__ = "rolling_averages"
+
+    id:           Mapped[int]      = mapped_column(Integer, primary_key=True, autoincrement=True)
+    admission_no: Mapped[str]      = mapped_column(ForeignKey("students.admission_no"), nullable=False)
+    exam_type:    Mapped[str]      = mapped_column(String(20), nullable=False)
+    avg_score:    Mapped[float]    = mapped_column(Float, nullable=False)
+    exam_count:   Mapped[int]      = mapped_column(Integer, nullable=False, server_default="0")
+    updated_at:   Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("admission_no", "exam_type", name="uq_ra_student_type"),
+        Index("idx_ra_student", "admission_no"),
+    )
+
+
+# ── Student Transfers ─────────────────────────────────────────────────────────
+
+class StudentTransfer(Base):
+    """Tracks when a student's program / branch / section changes."""
+    __tablename__ = "student_transfers"
+
+    id:               Mapped[int]      = mapped_column(Integer, primary_key=True, autoincrement=True)
+    admission_no:     Mapped[str]      = mapped_column(ForeignKey("students.admission_no"), nullable=False)
+    changed_at:       Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    old_program_name: Mapped[str]      = mapped_column(String(50),  nullable=False)
+    new_program_name: Mapped[str]      = mapped_column(String(50),  nullable=False)
+    old_branch_name:  Mapped[str]      = mapped_column(String(100), nullable=False)
+    new_branch_name:  Mapped[str]      = mapped_column(String(100), nullable=False)
+    old_section:      Mapped[str]      = mapped_column(String(10),  nullable=False)
+    new_section:      Mapped[str]      = mapped_column(String(10),  nullable=False)
+    old_class:        Mapped[str]      = mapped_column(String(30),  nullable=False)
+    new_class:        Mapped[str]      = mapped_column(String(30),  nullable=False)
+
+    __table_args__ = (
+        Index("idx_transfers_student",    "admission_no"),
+        Index("idx_transfers_changed_at", "changed_at"),
     )

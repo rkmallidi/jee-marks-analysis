@@ -6,7 +6,7 @@ from typing import Literal
 import pandas as pd
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.orm import Student
+from app.models.orm import Student, StudentTransfer
 from app.repositories.student_repo import StudentRepository
 from app.schemas.api import StudentCreate, StudentUpdate
 
@@ -98,7 +98,23 @@ class StudentService:
 
     async def update_student(self, admission_no: str, data: StudentUpdate) -> Student:
         student = await self.get_student(admission_no)
-        return await self._repo.update(student, data.model_dump(exclude_none=True))
+        updates = data.model_dump(exclude_none=True)
+
+        transfer_fields = {"program_name", "branch_name", "section", "student_class"}
+        if transfer_fields & set(updates.keys()):
+            self._repo._s.add(StudentTransfer(
+                admission_no     = student.admission_no,
+                old_program_name = student.program_name,
+                new_program_name = updates.get("program_name", student.program_name),
+                old_branch_name  = student.branch_name,
+                new_branch_name  = updates.get("branch_name", student.branch_name),
+                old_section      = student.section,
+                new_section      = updates.get("section", student.section),
+                old_class        = student.student_class,
+                new_class        = updates.get("student_class", student.student_class),
+            ))
+
+        return await self._repo.update(student, updates)
 
     async def delete_student(self, admission_no: str) -> None:
         student = await self.get_student(admission_no)

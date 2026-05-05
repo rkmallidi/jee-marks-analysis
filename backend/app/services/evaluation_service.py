@@ -4,10 +4,11 @@ import time
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.engines.analytics_engine import GradedRow, StudentMeta, compute_analytics
 from app.engines.rule_engine import QuestionRow, grade_response
-from app.models.orm import ExamPaper, GradedResult, Question, RankAudit, Result
+from app.models.orm import ExamPaper, GradedResult, Question, RankAudit, Result, RollingAverage
 from app.repositories.analytics_repo import AnalyticsRepository
 from app.repositories.alert_repo import AlertRepository
 from app.repositories.exam_repo import ExamRepository
@@ -51,7 +52,7 @@ def _resolve_question(q_orm: Question, key_type: str) -> QuestionRow:
 
 class EvaluationService:
     """
-    Grade responses → compute analytics → run alerts.
+    Grade responses → compute analytics → run alerts → update rolling averages.
     Supports BKC and AKC key types; both results stored in graded_results.
     """
 
@@ -108,8 +109,7 @@ class EvaluationService:
             ))
 
         # Every student must receive bonus marks for deleted questions regardless
-        # of whether they submitted a response for that question. Students who left
-        # a deleted question blank would otherwise be penalised unfairly in ranking.
+        # of whether they submitted a response for that question.
         deleted_q_ids = {
             q_id for q_id, q_orm in questions_map.items()
             if _resolve_question(q_orm, key_type).question_type == "DELETED"
@@ -155,6 +155,8 @@ class EvaluationService:
         from app.services.alert_service import AlertService
         await AlertService(self._s).run_for_exam(exam_id)
 
+        await self._update_rolling_averages(exam_id)
+
         elapsed = int((time.monotonic() - t0) * 1000)
         return {
             "exam_id":          exam_id,
@@ -192,17 +194,51 @@ class EvaluationService:
                 submitted_at=0.0,
             ))
 
+        # Build meta for all students who appeared in graded rows
         all_sids = {gr.admission_no for gr in graded}
         meta: dict[str, StudentMeta] = {}
         for sid in all_sids:
             s = await self._student_repo.get_by_admission_no(sid)
             if s:
                 meta[sid] = StudentMeta(
-                    admission_no=sid, branch_name=s.branch_name,
-                    program_name=s.program_name, section=s.section,
+                    admission_no=sid,
+                    branch_name=s.branch_name,
+                    program_name=s.program_name,
+                    student_class=s.student_class,
+                    section=s.section,
                 )
 
-        bundle = compute_analytics(exam_id, graded_rows, meta, paper_max_marks, subject_max_marks)
+        # Detect enrolled students for absent tracking (requires exam scope fields)
+        exam = await self._exam_repo.get_by_id(exam_id)
+        enrolled_ids: set[str] | None = None
+        if exam and exam.program_name and exam.student_class:
+            enrolled_students, _ = await self._student_repo.list_students(
+                branch_name=None,
+                program_name=exam.program_name,
+                section=None,
+                status="active",
+                allowed_sections=None,
+                page=None,
+                page_size=None,
+                student_class=exam.student_class,
+            )
+            enrolled_ids = {s.admission_no for s in enrolled_students}
+            # Pre-populate meta for enrolled students who may not have responded
+            for s in enrolled_students:
+                if s.admission_no not in meta:
+                    meta[s.admission_no] = StudentMeta(
+                        admission_no=s.admission_no,
+                        branch_name=s.branch_name,
+                        program_name=s.program_name,
+                        student_class=s.student_class,
+                        section=s.section,
+                    )
+
+        bundle = compute_analytics(
+            exam_id, graded_rows, meta,
+            paper_max_marks, subject_max_marks,
+            enrolled_student_ids=enrolled_ids,
+        )
         await self._analytics_repo.delete_exam_analytics(exam_id)
         await self._analytics_repo.insert_bundle(bundle)
 
@@ -261,6 +297,43 @@ class EvaluationService:
                     result_type="CONSOLIDATED",
                 ))
 
+        await self._s.flush()
+
+    async def _update_rolling_averages(self, exam_id: int) -> None:
+        """Recompute rolling averages for all present students in this exam.
+        Full recomputation avoids double-counting when evaluation is re-run.
+        """
+        exam = await self._exam_repo.get_by_id(exam_id)
+        if not exam or not exam.exam_type:
+            return
+
+        summaries = await self._analytics_repo.get_exam_summaries(exam_id)
+        present = [s for s in summaries if not s.is_absent]
+        if not present:
+            return
+
+        sids = list({s.admission_no for s in present})
+        for sid in sids:
+            past = await self._analytics_repo.get_student_history_by_type(sid, exam.exam_type)
+            present_past = [h for h in past if not h.is_absent]
+            if not present_past:
+                continue
+            avg   = sum(h.total_marks for h in present_past) / len(present_past)
+            count = len(present_past)
+            stmt  = pg_insert(RollingAverage).values(
+                admission_no=sid,
+                exam_type=exam.exam_type,
+                avg_score=round(avg, 4),
+                exam_count=count,
+            ).on_conflict_do_update(
+                index_elements=["admission_no", "exam_type"],
+                set_={
+                    "avg_score":  round(avg, 4),
+                    "exam_count": count,
+                    "updated_at": func.now(),
+                },
+            )
+            await self._s.execute(stmt)
         await self._s.flush()
 
     async def dry_run(self, exam_id: int) -> dict:

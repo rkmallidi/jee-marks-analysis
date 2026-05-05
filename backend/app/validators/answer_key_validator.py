@@ -19,7 +19,7 @@ def _parse_bool(raw: object) -> bool:
         return raw
     if isinstance(raw, (int, float)):
         return bool(raw)
-    return str(raw).strip().upper() in ("TRUE", "1", "YES")
+    return str(raw).strip().upper() in ("TRUE", "1", "YES", "Y")
 
 
 def _is_numerical_range(val: str) -> bool:
